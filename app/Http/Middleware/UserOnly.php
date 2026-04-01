@@ -4,15 +4,15 @@ namespace App\Http\Middleware;
 
 use Closure;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth; // Importe la Façade
 use Symfony\Component\HttpFoundation\Response;
 
 class UserOnly
 {
     public function handle(Request $request, Closure $next): Response
     {
-        // Si l'utilisateur est admin, on lui interdit l'accès aux routes "User"
-        // et on le redirige vers sa gestion des comptes.
-        if (auth()->check() && auth()->user()->role === 'admin') {
+        // Utilisation de la Façade au lieu de la fonction globale auth()
+        if (Auth::check() && Auth::user()->role === 'admin') {
             return redirect()->route('admin.users.index');
         }
 

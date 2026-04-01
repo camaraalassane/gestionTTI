@@ -53,7 +53,7 @@ Route::middleware(['auth', 'verified', 'user.only'])->group(function () {
     Route::post('/auth-code', [MaterielController::class, 'verifyAccess'])->name('materiel.verify');
 
     // ---------------------------------------------------------------------
-    // NAVIGATION DEMANDES (Les 10 Routes "Libres" pour User Simple)
+    // NAVIGATION DEMANDES
     // ---------------------------------------------------------------------
     Route::get('/form', [DemandeController::class, 'create'])->name('demandes.create');
     Route::get('/area', [DemandeController::class, 'gestionService'])->name('demandes.gestion_service');
@@ -66,39 +66,50 @@ Route::middleware(['auth', 'verified', 'user.only'])->group(function () {
     Route::post('/sn/{id}', [DemandeController::class, 'updateSerialNumber'])->name('demandes.update_sn');
     Route::put('/sync', [DemandeController::class, 'updateGroupe'])->name('demandes.update_groupe');
     Route::resource('forms', DemandeController::class)->except(['show', 'create'])->names('demandes');
-
+    Route::get('/demandes/export-pdf', [DemandeController::class, 'exportPDF'])->name('demandes.pdf');
+Route::delete('/demandes/commande/{numcomande}', [DemandeController::class, 'destroy_by_commande'])
+    ->name('demandes.destroy_by_commande');
     // ---------------------------------------------------------------------
     // NAVIGATION SÉCURISÉE (Protégée par hasMaterialCode)
     // ---------------------------------------------------------------------
     Route::middleware(['hasMaterialCode'])->group(function () {
-// Dashboard global (Libre)
-    Route::get('/main', [DashboardController::class, 'index'])->name('dashboard');
 
+        Route::get('/main', [DashboardController::class, 'index'])->name('dashboard');
+Route::get('/materiel/{id}/historique', [MaterielController::class, 'historique'])
+    ->name('materiel.historique');
+    Route::get('/materiel/{id}/historique/pdf', [MaterielController::class, 'exportHistorique'])
+    ->name('materiel.historique.pdf');
         // 1. Matériel & Stock
+        Route::put('/modele/{modele}', [MaterielController::class, 'updateModele'])->name('materiel.update.modele');
         Route::get('/list', [MaterielController::class, 'list'])->name('materiel.index');
+        Route::get('/materiel/export/{format}', [MaterielController::class, 'export'])->name('materiel.export');
         Route::get('/stock', [MaterielController::class, 'index'])->name('materiel.indexmat');
         Route::post('/batch', [MaterielController::class, 'store_group'])->name('materiel.store_group');
-        Route::get('/exp', [MaterielController::class, 'exportRange'])->name('materiel.export');
+        Route::get('/check-contrat/{numero}', [ReceptionController::class, 'checkContrat'])->name('reception.check');
         Route::resource('asset', MaterielController::class)->except(['index'])->names('materiel');
 
-        // 2. Inventaire / Audit
-        Route::resource('check', InventaireController::class)->names('inventaire');
-        Route::get('/check/{id}/pdf', [InventaireController::class, 'downloadPdf'])->name('inventaire.pdf');
+        // 2. Inventaire / Audit (CORRECTION : Changement du préfixe URL pour éviter conflit)
+        Route::resource('audit', InventaireController::class)->names('inventaire');
+Route::get('/audit/{id}/pdf', [InventaireController::class, 'downloadPdf'])->name('inventaire.pdf');
 
-        // 3. Module Paramètres (Catégories/Services) -> DÉPLACÉ ICI
+        // 3. Module Paramètres
         Route::get('/setup', [ParametreController::class, 'index'])->name('parametres.index');
         Route::post('/setup/cat', [ParametreController::class, 'storeCategorie'])->name('categories.store');
         Route::delete('/setup/cat/{id}', [ParametreController::class, 'destroyCategorie'])->name('categories.destroy');
         Route::post('/setup/srv', [ParametreController::class, 'storeService'])->name('services.store');
         Route::delete('/setup/srv/{id}', [ParametreController::class, 'destroyService'])->name('services.destroy');
 
-// 4. Contrats & Réceptions
+        // 4. Contrats & Réceptions
         Route::get('/docs', [ReceptionController::class, 'index'])->name('reception.index');
         Route::get('/docs/dl/{id}', [ReceptionController::class, 'downloadContrat'])->name('reception.download');
         Route::get('/docs/api/{id}', [ReceptionController::class, 'getMaterielsJson'])->name('reception.api');
         Route::get('/docs/pdf/{id}', [ReceptionController::class, 'exportPdf'])->name('reception.pdf');
-    }); // Fin du middleware hasMaterialCode
-}); // Fin du middleware user.only
+        Route::get('/check-sn/{sn}', [MaterielController::class, 'checkSn']);
+        Route::get('/docs/api/lots/{id}', [ReceptionController::class, 'getLotsJson'])->name('reception.api.lots');
+        Route::get('/docs/pdf-lot/{lotId}', [ReceptionController::class, 'exportPdfLot'])->name('reception.pdf.lot');
+
+    }); // Fin hasMaterialCode
+}); // Fin user.only
 
 // =========================================================================
 // 3. PROFIL COMMUN

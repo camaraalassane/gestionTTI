@@ -13,31 +13,29 @@ return new class extends Migration
     {
         Schema::create('demandes', function (Blueprint $table) {
             $table->id();
-
-            // Relation avec le matériel
+            
+            // Liaisons normalisées
             $table->foreignId('materiel_id')->constrained('materiels')->onDelete('cascade');
+            // Ajout de la liaison vers le catalogue pour supprimer la dépendance aux chaînes de caractères
+            $table->foreignId('modele_materiel_id')->constrained('modele_materiels')->onDelete('cascade');
 
-            // Informations matériel au moment de la demande (Dénormalisation pour l'historique)
-            $table->string('nom_materiel');
+            // Données redondantes pour l'affichage rapide (cache)
+            $table->string('nom_materiel'); 
             $table->string('categorie')->nullable();
-            $table->string('numero_serie')->nullable()->index(); // Indexé pour recherche rapide
+            $table->string('numero_serie')->nullable()->index();
 
-            // Détails de la commande
-            // Note : numcomande est en string pour accepter les formats "CMD-2026-0001"
+            // Gestion de la demande
             $table->string('numcomande')->index();
-
-            // Bénéficiaire
             $table->string('service_beneficiaire')->index();
-            $table->string('demandeur_nom');
+            $table->string('demandeur_nom')->index();
+
             $table->integer('nbredemande')->default(1);
-            // Suivi et Statut
             $table->date('date_demande')->index();
-            $table->string('statut')->default('En attente')->index(); // Index crucial pour séparer Flux/Historique
-$table->string('scan_contrat')->nullable();
-            // Notes
+            $table->string('statut')->default('En attente')->index();
+            $table->string('scan_contrat')->nullable();
+
             $table->text('description')->nullable();
             $table->text('observation')->nullable();
-
             $table->timestamps();
         });
     }

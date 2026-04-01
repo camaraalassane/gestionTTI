@@ -14,10 +14,10 @@ return new class extends Migration
     Schema::create('inventaire_details', function (Blueprint $table) {
     $table->id();
     $table->foreignId('inventaire_id')->constrained()->onDelete('cascade');
-    $table->string('designation');
-    $table->string('numero_serie')->nullable();
+    $table->string('designation')->index();
+    $table->string('numero_serie')->nullable()->index(); // AJOUT INDEX
     $table->string('etat_materiel');
-    $table->string('localisation');
+    $table->string('localisation')->index(); // AJOUT INDEX
     $table->timestamps();
 });
 

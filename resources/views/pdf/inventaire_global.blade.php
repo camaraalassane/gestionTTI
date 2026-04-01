@@ -3,107 +3,167 @@
 <head>
     <meta charset="UTF-8">
     <style>
-        @page { margin: 1cm 1.5cm 4cm 1.5cm; }
-        body { font-family: sans-serif; font-size: 11px; color: #333; }
-
-        #footer {
-            position: fixed;
-            bottom: -2.5cm;
-            left: 0;
-            right: 0;
-            height: 3cm;
+        @page {
+            size: A4;
+            margin: 1.2cm;
+        }
+        body {
+            font-family: 'Helvetica', 'Arial', sans-serif;
+            font-size: 10px;
+            color: #000;
+            line-height: 1.4;
+            margin: 0;
+            padding: 0;
         }
 
-        .header { border-bottom: 2px solid #1a237e; margin-bottom: 20px; padding-bottom: 10px; text-align: center; }
-        .title { color: #1a237e; text-transform: uppercase; margin: 0; font-size: 16px; }
+        /* Header */
+        .header-table {
+            width: 100%;
+            border-bottom: 2px solid #000;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+        }
 
-        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-        th { background-color: #1a237e; color: white; padding: 8px; text-align: left; font-size: 10px; }
-        td { padding: 6px; border: 1px solid #ddd; vertical-align: top; }
+        /* Table principale */
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+        }
+        .data-table th {
+            background: #f0f0f0;
+            border: 1px solid #000;
+            padding: 8px;
+            font-size: 9px;
+            text-transform: uppercase;
+        }
+        .data-table td {
+            border: 1px solid #000;
+            padding: 8px;
+            vertical-align: top;
+        }
 
-        /* Style pour les pièces détachées */
-        .pieces-list { margin-top: 5px; font-size: 9px; color: #666; }
-        .piece-item { display: inline-block; margin-right: 10px; }
-        .piece-out { color: #d32f2f; font-weight: bold; } /* Rouge pour les pièces sorties */
+        /* CATÉGORIE */
+        .category-header {
+            background-color: #333 !important;
+            color: #fff !important;
+            font-weight: bold;
+            font-size: 11px;
+            padding: 10px !important;
+            border: 1px solid #000 !important;
+            text-transform: uppercase;
+        }
 
-        .signature-table { width: 100%; border: none !important; }
-        .signature-table td { border: 1px solid #333; width: 45%; height: 80px; vertical-align: top; text-align: center; }
+        /* MODÈLE */
+        .model-group-row {
+            background-color: #e9e9e9;
+            font-weight: bold;
+            font-size: 10px;
+        }
+
+        /* Pièces sur une seule ligne */
+        .piece-item {
+            display: block;
+            font-size: 8.5px;
+            padding: 3px 0;
+            border-bottom: 1px solid #eee;
+        }
+
+        /* Signatures */
+        .footer-signatures {
+            margin-top: 30px;
+            width: 100%;
+            page-break-inside: avoid;
+        }
+        .sig-table { width: 100%; border-collapse: collapse; }
+        .sig-box {
+            width: 48%;
+            border: 1px solid #000;
+            height: 90px;
+            padding: 10px;
+            vertical-align: top;
+        }
     </style>
 </head>
 <body>
 
-    <div id="footer">
-        <table class="signature-table">
-            <tr>
-                <td><strong>Le Responsable Logistique</strong><br><small>(Nom et Signature)</small></td>
-                <td style="border:none; width:10%;"></td>
-                <td><strong>Direction Générale / Bénéficiaire</strong><br><small>(Nom et Signature)</small></td>
-            </tr>
-        </table>
-    </div>
+    <table class="header-table">
+        <tr>
+            <td>
+                <h1 style="margin:0; font-size: 18px;">INVENTAIRE TECHNIQUE PAR MATÉRIEL</h1>
+                <div style="margin-top: 5px;">Période : <strong>{{ $periode }}</strong></div>
+                <div style="margin-top: 5px; color: #d32f2f; font-weight: bold;">[ ÉTAT DES STOCKS PRÉSENTS AU MAGASIN ]</div>
+            </td>
+            <td style="text-align:right;">
+                Date d'édition : {{ $date }}<br>
+                <strong>Rapport Certifié</strong>
+            </td>
+        </tr>
+    </table>
 
-    <div class="header">
-        <h1 class="title">Rapport d'Inventaire Matériel</h1>
-        <div>
-            @if(is_array($periode))
-                Période du <strong>{{ $periode['debut'] ?? 'N/A' }}</strong> au <strong>{{ $periode['fin'] ?? 'N/A' }}</strong>
-            @else
-                <strong>{{ $periode }}</strong>
-            @endif
-        </div>
-        <div style="margin-top: 5px;">Généré le {{ $date }}</div>
-    </div>
-
-    <table>
+    <table class="data-table">
         <thead>
             <tr>
-                <th width="40%">Désignation & Composants</th>
-                <th width="20%">S/N Principal</th>
-                <th width="15%">État</th>
-                <th width="25%">Affectation Actuelle</th>
+                <th width="45%">Désignation & Pièces (Stock)</th>
+                <th width="20%">N° Série Principal</th>
+                <th width="10%">État</th>
+                <th width="25%">Localisation / Service</th>
             </tr>
         </thead>
         <tbody>
-            @forelse($materiels as $materiel)
+            @forelse($materielsGroupes as $nomCat => $groupesParModele)
                 <tr>
-                    <td>
-                        <strong>{{ $materiel->nom }}</strong>
-
-                        {{-- Liste des pièces --}}
-                        @if($materiel->pieces && $materiel->pieces->count() > 0)
-                            <div class="pieces-list">
-                                <em>Composants :</em><br>
-                                @foreach($materiel->pieces as $piece)
-                                    <span class="piece-item">
-                                        • {{ $piece->nom_piece }}
-                                        @if($piece->demande_id)
-                                            <span class="piece-out">(SORTI - CMD#{{ $piece->demande_id }})</span>
-                                        @endif
-                                    </span>
-                                @endforeach
-                            </div>
-                        @endif
-                    </td>
-                    <td><code>{{ $materiel->numero_serie ?? 'N/A' }}</code></td>
-                    <td style="text-transform: uppercase; font-weight: bold;">
-                        {{ $materiel->etat }}
-                    </td>
-                    <td>
-                        @if($materiel->demande)
-                            {{ $materiel->demande->service_beneficiaire }}
-                            <br><small>Reçu par: {{ $materiel->demande->demandeur_nom }}</small>
-                        @else
-                            <span style="color: #2e7d32;">✔ EN STOCK</span>
-                        @endif
-                    </td>
+                    <td colspan="4" class="category-header">CATÉGORIE : {{ $nomCat }}</td>
                 </tr>
+
+                @foreach($groupesParModele as $nomModele => $materiels)
+                    <tr class="model-group-row">
+                        <td colspan="4">
+                            MODÈLE : {{ strtoupper($nomModele) }}
+                            <span style="float: right;">Unités disponibles : {{ $materiels->count() }}</span>
+                        </td>
+                    </tr>
+
+                    @foreach($materiels as $mat)
+                        <tr>
+                            <td style="padding-left: 15px;">
+                                @forelse($mat->pieces as $p)
+                                    <span class="piece-item">
+                                        • {{ $p->nom_piece }} ({{ $p->numero_serie ?? 'N/A' }})
+                                        <span style="color: #2e7d32; font-size: 7px;"> [EN STOCK]</span>
+                                    </span>
+                                @empty
+                                    <span style="color: #999; font-style: italic;">Aucune pièce</span>
+                                @endforelse
+                            </td>
+                            <td align="center"><strong>{{ $mat->numero_serie ?? 'N/A' }}</strong></td>
+                            <td align="center">{{ $mat->etat ?? 'N/A' }}</td>
+                            <td>
+                                <span style="color: #2e7d32; font-weight: bold;">MAGASIN CENTRAL</span><br>
+                                <small>Disponible pour affectation</small>
+                            </td>
+                        </tr>
+                    @endforeach
+                @endforeach
             @empty
                 <tr>
-                    <td colspan="4" style="text-align: center;">Aucun matériel enregistré dans la base.</td>
+                    <td colspan="4" style="text-align: center; padding: 20px;">
+                        <strong>AUCUN MATÉRIEL EN STOCK</strong>
+                    </td>
                 </tr>
             @endforelse
         </tbody>
     </table>
+
+    <div class="footer-signatures">
+        <table class="sig-table">
+            <tr>
+                <td class="sig-box"><strong>OFFICIER MATERIEL :</strong></td>
+                <td width="4%"></td>
+                <td class="sig-box"><strong>SOUS DIRECTEUR ST :</strong></td>
+            </tr>
+        </table>
+    </div>
 
 </body>
 </html>

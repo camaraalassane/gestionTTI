@@ -4,9 +4,11 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 
 class InventaireDetail extends Model
 {
+    use HasFactory;
     // Ajoutez cette ligne pour autoriser l'insertion groupée
     protected $fillable = [
         'inventaire_id',

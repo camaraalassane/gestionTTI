@@ -1,47 +1,48 @@
 <script setup>
-import { computed, watch } from 'vue';
-import { Head, useForm } from '@inertiajs/vue3';
-import AuthentDemandeLayout from '@/Layouts/AuthentDemandeLayout.vue';
+    import { computed, watch } from 'vue';
+    import { Head, useForm } from '@inertiajs/vue3';
+    import AuthentDemandeLayout from '@/Layouts/AuthentDemandeLayout.vue';
 
-const props = defineProps({ 
-    demande: Object, 
-    materiels: Array, 
-    services: Array 
-});
-
-const form = useForm({
-    numcomande: props.demande?.numcomande || '',
-    demandeur_nom: props.demande?.demandeur_nom || '',
-    service_beneficiaire: props.demande?.service_beneficiaire || '',
-    date_demande: props.demande?.date_demande || '',
-    nom_materiel: props.demande?.nom_materiel || '',
-    categorie: props.demande?.categorie || '',
-    nbredemande: props.demande?.nbredemande || 1,
-    description: props.demande?.description || '',
-});
-
-// Watcher pour synchroniser la catégorie
-watch(() => form.nom_materiel, (nouveauNom) => {
-    const matFound = props.materiels.find(m => m.nom === nouveauNom);
-    form.categorie = matFound?.categorie?.nom || 'Non classé';
-});
-
-const submit = () => {
-    form.put(route('demandes.update', props.demande.id), {
-        onSuccess: () => {
-            // Optionnel : redirection ou toast
-        },
+    const props = defineProps({
+        demande: Object,
+        materiels: Array,
+        services: Array
     });
-};
 
-const goBack = () => window.history.back();
+    const form = useForm({
+        numcomande: props.demande?.numcomande || '',
+        demandeur_nom: props.demande?.demandeur_nom || '',
+        service_beneficiaire: props.demande?.service_beneficiaire || '',
+        date_demande: props.demande?.date_demande || '',
+        nom_materiel: props.demande?.nom_materiel || '',
+        categorie: props.demande?.categorie || '',
+        nbredemande: props.demande?.nbredemande || 1,
+        description: props.demande?.description || '',
+    });
+
+    // Watcher pour synchroniser la catégorie
+    watch(() => form.nom_materiel, (nouveauNom) => {
+        const matFound = props.materiels.find(m => m.nom === nouveauNom);
+        form.categorie = matFound?.categorie?.nom || 'Non classé';
+    });
+
+    const submit = () => {
+        form.put(route('demandes.update', props.demande.id), {
+            onSuccess: () => {
+                // Optionnel : redirection ou toast
+            },
+        });
+    };
+
+    const goBack = () => window.history.back();
 </script>
 
 <template>
+
     <Head title="Modifier Demande" />
     <AuthentDemandeLayout>
         <v-container fluid class="pa-6 bg-grey-lighten-4 min-vh-100">
-            
+
             <v-row class="mb-6 align-center">
                 <v-col cols="auto">
                     <v-btn icon="mdi-arrow-left" variant="elevated" color="white" @click="goBack" class="rounded-lg shadow-sm"></v-btn>
@@ -92,17 +93,7 @@ const goBack = () => window.history.back();
                             <v-card-text class="pa-6">
                                 <v-row>
                                     <v-col cols="12" md="7">
-                                        <v-select 
-                                            v-model="form.nom_materiel" 
-                                            :items="materiels" 
-                                            item-title="nom" 
-                                            item-value="nom" 
-                                            label="Désignation" 
-                                            variant="outlined" 
-                                            density="comfortable"
-                                            color="teal"
-                                            :error-messages="form.errors.nom_materiel"
-                                        >
+                                        <v-select v-model="form.nom_materiel" :items="materiels" item-title="nom" item-value="nom" label="Désignation" variant="outlined" density="comfortable" color="teal" :error-messages="form.errors.nom_materiel">
                                             <template v-slot:item="{ props, item }">
                                                 <v-list-item v-bind="props" :subtitle="'Catégorie: ' + (item.raw.categorie?.nom || 'N/A')"></v-list-item>
                                             </template>
@@ -132,7 +123,7 @@ const goBack = () => window.history.back();
                                     <div class="text-h6 font-weight-black text-teal-darken-4">Prêt à valider ?</div>
                                     <p class="text-caption text-teal-darken-1">Vérifiez les quantités avant de sauvegarder.</p>
                                 </v-sheet>
-                                
+
                                 <v-card-text class="pa-6">
                                     <div class="d-flex justify-space-between mb-2">
                                         <span class="text-grey">Matériel :</span>
@@ -142,26 +133,18 @@ const goBack = () => window.history.back();
                                         <span class="text-grey">Quantité :</span>
                                         <v-chip size="small" color="teal" variant="flat" class="font-weight-black">{{ form.nbredemande }}</v-chip>
                                     </div>
-                                    
+
                                     <v-divider class="mb-6"></v-divider>
 
-                                    <v-btn 
-                                        block 
-                                        color="teal-darken-3" 
-                                        size="x-large" 
-                                        type="submit" 
-                                        class="rounded-lg font-weight-bold elevation-4 mb-3"
-                                        :loading="form.processing"
-                                        prepend-icon="mdi-content-save"
-                                    >
+                                    <v-btn block color="teal-darken-3" size="x-large" type="submit" class="rounded-lg font-weight-bold elevation-4 mb-3" :loading="form.processing" prepend-icon="mdi-content-save">
                                         Sauvegarder
                                     </v-btn>
-                                    
+
                                     <v-btn block variant="tonal" color="grey-darken-1" size="large" @click="goBack" class="rounded-lg">
                                         Abandonner
                                     </v-btn>
                                 </v-card-text>
-                                
+
                                 <v-alert v-if="form.isDirty" type="warning" variant="tonal" icon="mdi-alert-circle" density="compact" class="ma-4 rounded-lg text-caption">
                                     Vous avez des modifications non enregistrées.
                                 </v-alert>
@@ -175,17 +158,20 @@ const goBack = () => window.history.back();
 </template>
 
 <style scoped>
-.sticky-top {
-    position: sticky;
-    top: 24px;
-}
-.shadow-sm {
-    box-shadow: 0 2px 8px rgba(0,0,0,0.05) !important;
-}
-.shadow-lg {
-    box-shadow: 0 10px 30px rgba(0,0,0,0.1) !important;
-}
-:deep(.v-field--variant-filled) {
-    border-radius: 8px 8px 0 0;
-}
+    .sticky-top {
+        position: sticky;
+        top: 24px;
+    }
+
+    .shadow-sm {
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05) !important;
+    }
+
+    .shadow-lg {
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1) !important;
+    }
+
+    :deep(.v-field--variant-filled) {
+        border-radius: 8px 8px 0 0;
+    }
 </style>

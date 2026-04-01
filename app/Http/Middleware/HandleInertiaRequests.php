@@ -45,7 +45,7 @@ class HandleInertiaRequests extends Middleware
                 'error'   => fn () => $request->session()->get('error'),
             ],
 
-            // Optimisation de Ziggy : On utilise une "Closure" (fn) 
+            // Optimisation de Ziggy : On utilise une "Closure" (fn)
             // pour que les routes ne soient chargées que si nécessaire.
             'ziggy' => fn () => [
                 ...(new Ziggy)->toArray(),

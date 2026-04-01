@@ -17,19 +17,31 @@ export default defineConfig({
                 },
             },
         }),
-        // Le plugin vuetify doit être placé après le plugin vue
         vuetify({
             autoImport: true,
         }),
     ],
-    // Force Vite à rester sur 127.0.0.1 pour éviter les erreurs de connexion
     server: {
         host: "127.0.0.1",
-        port: 5173,
+        port: 5175,
         strictPort: true,
+        https: false,
         hmr: {
             host: "127.0.0.1",
         },
+    },
+    // AJOUT : Optimisation pour le mode Build (accélère le chargement sur PC Acer)
+    build: {
+        chunkSizeWarningLimit: 1000,
+        rollupOptions: {
+            output: {
+                manualChunks(id) {
+                    if (id.includes('node_modules')) {
+                        return 'vendor'; // Sépare Vuetify et Vue du reste de ton code
+                    }
+                }
+            }
+        }
     },
     resolve: {
         alias: {

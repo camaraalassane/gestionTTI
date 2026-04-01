@@ -5,21 +5,21 @@
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
     <style>
         /* Configuration de la page */
-        @page { 
+        @page {
             margin: 1cm 1.5cm 4cm 1.5cm; /* Marge du bas large (4cm) pour laisser la place aux signatures */
         }
-        
+
         body { font-family: 'Helvetica', sans-serif; font-size: 11px; color: #333; }
-        
+
         /* En-tête */
         .header { margin-bottom: 20px; border-bottom: 2px solid #1a237e; padding-bottom: 10px; }
         .title { text-align: center; color: #1a237e; text-transform: uppercase; margin: 0; font-size: 18px; }
-        
+
         /* Tableaux de données */
         .table-data { width: 100%; border-collapse: collapse; margin-top: 10px; table-layout: fixed; }
         .table-data th { background-color: #1a237e; color: white; padding: 8px; font-size: 9px; text-align: left; }
         .table-data td { padding: 6px; border: 1px solid #ddd; word-wrap: break-word; }
-        
+
         /* Lignes */
         .main-row { background-color: #f5f5f5; font-weight: bold; }
         .piece-row { color: #555; font-size: 10px; }
@@ -27,23 +27,23 @@
 
         /* POSITIONNEMENT FIXE EN BAS DE PAGE */
         #footer {
-            position: fixed; 
+            position: fixed;
             bottom: -2.5cm; /* Aligne tout en bas de la marge définie dans @page */
-            left: 0px; 
+            left: 0px;
             right: 0px;
             height: 3cm;
         }
 
-        .signature-table { 
-            width: 100%; 
+        .signature-table {
+            width: 100%;
             border-collapse: collapse;
         }
-        .signature-table td { 
-            border: 1px solid #333; 
+        .signature-table td {
+            border: 1px solid #333;
             width: 45%;
             height: 100px; /* Hauteur fixe pour les boites */
-            vertical-align: top; 
-            padding: 10px; 
+            vertical-align: top;
+            padding: 10px;
             text-align: center;
         }
         .signature-space { border: none !important; width: 10%; }
@@ -56,7 +56,7 @@
         <table class="signature-table">
             <tr>
                 <td>
-                    <span class="sig-label">Le Responsable Logistique</span>
+                    <span class="sig-label">Officier materiel</span>
                     <div style="margin-top: 60px; font-size: 9px; color: #777;">Nom, Date et Signature</div>
                 </td>
                 <td class="signature-space"></td>

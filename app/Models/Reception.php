@@ -14,6 +14,7 @@ class Reception extends Model
     protected $table = 'receptions';
 
     protected $fillable = [
+        'contrat_id',       // <--- TRÈS IMPORTANT : Ajoute ceci pour permettre le lien
         'fournisseur',
         'numero_contrat',
         'date_livraison',
@@ -28,12 +29,22 @@ class Reception extends Model
      * Casts pour assurer le bon formatage vers Inertia/Vuetify
      */
     protected $casts = [
-        'date_livraison' => 'date:Y-m-d', // Format standard pour les inputs date de Vuetify
+        'date_livraison' => 'date:Y-m-d',
         'created_at'     => 'datetime:d/m/Y H:i',
     ];
 
     /**
-     * Relation avec la Catégorie (Indispensable pour savoir ce qu'on a reçu)
+     * Relation avec le Contrat global (NOUVEAU)
+     * Permet de remonter au contrat parent pour voir l'avancement global
+     */
+    public function contrat(): BelongsTo
+    {
+        // On utilise Contrat avec Majuscule si c'est ce que tu as choisi finalement
+        return $this->belongsTo(Contrat::class, 'contrat_id');
+    }
+
+    /**
+     * Relation avec la Catégorie
      */
     public function categorie(): BelongsTo
     {
@@ -41,7 +52,7 @@ class Reception extends Model
     }
 
     /**
-     * Relation avec les matériels (Les unités précises créées lors de cette réception)
+     * Relation avec les matériels
      */
     public function materiels(): HasMany
     {

@@ -1,176 +1,113 @@
 <script setup>
-import { ref } from "vue";
-import { Head, Link, useForm } from "@inertiajs/vue3";
+    import { useForm, Head, Link } from '@inertiajs/vue3';
+    import { ref } from 'vue';
 
-defineProps({
-    canResetPassword: { type: Boolean, default: false },
-    status: { type: String, default: "" },
-});
+    defineProps({ canResetPassword: Boolean, status: String });
 
-const form = useForm({
-    email: "",
-    password: "",
-    remember: false,
-});
+    const form = useForm({ email: '', password: '', remember: false });
+    const showPassword = ref(false);
 
-const showPassword = ref(false);
-
-const submit = () => {
-    form.post(route("login"), {
-        onFinish: () => form.reset("password"),
-    });
-};
+    const submit = () => form.post(route('login'), { onFinish: () => form.reset('password') });
 </script>
 
 <template>
-    <v-container fluid class="fill-height bg-teal-lighten-5">
-        <Head title="Connexion" />
+    <v-app>
+        <v-container fluid class="pa-0 fill-height">
+            <v-row no-gutters class="fill-height">
+                <!-- Colonne gauche avec logo DTTIA (fixe) - COULEUR TEAL comme register -->
+                <v-col cols="12" md="6" class="d-none d-md-flex bg-teal-darken-4 align-center justify-center" style="height: 100vh; position: sticky; top: 0;">
+                    <div class="text-center pa-10">
+                        <v-img src="/images/LOGOdttia.jpeg" width="220" class="mb-8 rounded-circle bg-white pa-4 elevation-10 mx-auto"></v-img>
+                        <h1 class="text-h2 font-weight-black text-white">DTTIA</h1>
+                        <p class="text-h6 text-white opacity-80 mt-4">Direction des Transmissions et Informatique</p>
+                        <p class="text-body-1 text-white opacity-70 mt-2">Gestion du Magasin</p>
+                    </div>
+                </v-col>
 
-        <v-row align="center" justify="center" no-gutters>
-            <v-col cols="12" sm="8" md="4" lg="3" class="pa-4">
-                <div class="text-center mb-6">
-                    <v-avatar
-                        color="teal-darken-2"
-                        size="72"
-                        class="mb-4 elevation-3"
-                    >
-                        <v-icon
-                            icon="mdi-shield-lock"
-                            size="40"
-                            color="white"
-                        />
-                    </v-avatar>
-                    <h1 class="text-h4 font-weight-black text-teal-darken-4">
-                        Gestion TTI
-                    </h1>
-                    <p class="text-body-1 text-teal-darken-2">
-                        Authentification sécurisée
-                    </p>
-                </div>
+                <!-- Colonne droite avec formulaire (fixe, scroll dans le formulaire) -->
+                <v-col cols="12" md="6" class="bg-grey-lighten-4 d-flex align-center justify-center" style="height: 100vh; position: sticky; top: 0;">
+                    <v-card elevation="0" rounded="xl" class="pa-6 pa-md-10 w-100 bg-white" style="max-width: 450px; max-height: 90vh; overflow-y: auto; border: 1px solid rgba(0, 0, 0, 0.08);">
+                        <div class="text-center mb-6">
+                            <!-- Logo visible sur mobile uniquement -->
+                            <v-avatar color="teal-darken-2" size="64" class="mb-4 d-md-none elevation-3">
+                                <v-icon icon="mdi-shield-lock" size="36" color="white" />
+                            </v-avatar>
 
-                <v-card
-                    elevation="8"
-                    class="pa-6 rounded-xl border-t-lg border-teal-darken-2"
-                >
-                    <v-alert
-                        v-if="status"
-                        type="success"
-                        variant="tonal"
-                        class="mb-6 rounded-lg"
-                        density="compact"
-                        closable
-                    >
-                        {{ status }}
-                    </v-alert>
-
-                    <v-form @submit.prevent="submit">
-                        <v-text-field
-                            v-model="form.email"
-                            label="Adresse Email"
-                            prepend-inner-icon="mdi-email-outline"
-                            type="email"
-                            variant="outlined"
-                            density="comfortable"
-                            color="teal-darken-2"
-                            :error-messages="form.errors.email"
-                            :disabled="form.processing"
-                            class="mb-2"
-                        />
-
-                        <v-text-field
-                            v-model="form.password"
-                            label="Mot de passe"
-                            prepend-inner-icon="mdi-lock-outline"
-                            :type="showPassword ? 'text' : 'password'"
-                            :append-inner-icon="
-                                showPassword ? 'mdi-eye-off' : 'mdi-eye'
-                            "
-                            variant="outlined"
-                            density="comfortable"
-                            color="teal-darken-2"
-                            :error-messages="form.errors.password"
-                            :disabled="form.processing"
-                            @click:append-inner="showPassword = !showPassword"
-                            class="mb-2"
-                        />
-
-                        <div
-                            class="d-flex align-center justify-space-between mb-4"
-                        >
-                            <v-checkbox
-                                v-model="form.remember"
-                                label="Rester connecté"
-                                hide-details
-                                color="teal-darken-2"
-                                density="compact"
-                                class="ms-n2"
-                            />
-
-                            <Link
-                                v-if="canResetPassword"
-                                :href="route('password.request')"
-                                class="text-caption text-teal-darken-3 text-decoration-none font-weight-bold"
-                            >
-                                Oublié ?
-                            </Link>
+                            <h2 class="text-h4 font-weight-bold mb-2 text-teal-darken-4">Connexion</h2>
+                            <p class="text-grey mb-8">Connectez-vous pour accéder à vos archives</p>
                         </div>
 
-                        <v-btn
-                            type="submit"
-                            color="teal-darken-2"
-                            block
-                            size="large"
-                            :loading="form.processing"
-                            :disabled="form.processing"
-                            class="rounded-lg text-none font-weight-bold elevation-2"
-                        >
-                            Se connecter
-                        </v-btn>
-                    </v-form>
+                        <v-alert v-if="status" type="success" variant="tonal" class="mb-4" density="compact">{{ status }}</v-alert>
 
-                    <v-divider class="my-6">
-                        <span class="text-caption text-disabled px-2">OU</span>
-                    </v-divider>
+                        <v-form @submit.prevent="submit">
+                            <v-text-field v-model="form.email" label="Email" variant="outlined" :error-messages="form.errors.email" prepend-inner-icon="mdi-email-outline" color="teal-darken-2" class="mb-2" />
 
-                    <div class="text-center">
-                        <p class="text-body-2 text-grey-darken-1">
-                            Nouveau sur la plateforme ?
-                            <Link
-                                :href="route('register')"
-                                class="text-teal-darken-2 text-decoration-none font-weight-black ms-1"
-                            >
-                                Créer un compte
-                            </Link>
-                        </p>
-                    </div>
-                </v-card>
+                            <v-text-field v-model="form.password" label="Mot de passe" :type="showPassword ? 'text' : 'password'" variant="outlined" :error-messages="form.errors.password" prepend-inner-icon="mdi-lock-outline" :append-inner-icon="showPassword ? 'mdi-eye-off' : 'mdi-eye'" color="teal-darken-2" class="mb-6" @click:append-inner="showPassword = !showPassword" />
 
-                <p class="text-center text-caption text-teal-darken-1 mt-8">
-                    &copy; {{ new Date().getFullYear() }} — Portail Technique
-                    TTI
-                </p>
-            </v-col>
-        </v-row>
-    </v-container>
+                            <div class="d-flex justify-space-between align-center mb-6">
+                                <v-checkbox v-model="form.remember" label="Rester connecté" density="compact" color="teal-darken-2" hide-details />
+                                <Link v-if="canResetPassword" :href="route('password.request')" class="text-teal-darken-2 text-decoration-none">
+                                    Oublié ?
+                                </Link>
+                            </div>
+
+                            <v-btn type="submit" color="teal-darken-2" block size="x-large" :loading="form.processing" class="rounded-lg font-weight-bold">
+                                SE CONNECTER
+                            </v-btn>
+
+                            <div class="text-center mt-6">
+                                <span class="text-grey">Pas encore de compte ?</span>
+                                <Link :href="route('register')" class="text-teal-darken-2 text-decoration-none font-weight-bold ms-1">
+                                    Créer un compte
+                                </Link>
+                            </div>
+                        </v-form>
+                    </v-card>
+                </v-col>
+            </v-row>
+        </v-container>
+    </v-app>
 </template>
 
 <style scoped>
-/* Suppression de l'effet Hover Transform pour économiser du GPU sur Acer */
-.v-card {
-    border-top-width: 6px !important;
-}
-
-/* Animation d'entrée très légère */
-.v-container {
-    animation: fadeIn 0.4s ease-in;
-}
-
-@keyframes fadeIn {
-    from {
-        opacity: 0;
+    .fill-height {
+        height: 100vh;
     }
-    to {
-        opacity: 1;
+
+    .v-container {
+        animation: fadeIn 0.4s ease-in;
     }
-}
+
+    @keyframes fadeIn {
+        from {
+            opacity: 0;
+        }
+
+        to {
+            opacity: 1;
+        }
+    }
+
+    a {
+        color: inherit;
+        text-decoration: none;
+    }
+
+    .v-card::-webkit-scrollbar {
+        width: 6px;
+    }
+
+    .v-card::-webkit-scrollbar-track {
+        background: #f1f1f1;
+        border-radius: 10px;
+    }
+
+    .v-card::-webkit-scrollbar-thumb {
+        background: #c0c0c0;
+        border-radius: 10px;
+    }
+
+    .v-card::-webkit-scrollbar-thumb:hover {
+        background: #a0a0a0;
+    }
 </style>

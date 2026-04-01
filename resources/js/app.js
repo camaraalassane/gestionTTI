@@ -1,4 +1,4 @@
-import "../css/app.css"; // <--- INDISPENSABLE : Relie ton nouveau CSS léger
+import "../css/app.css";
 import "./bootstrap";
 import { createApp, h } from "vue";
 import { createInertiaApp } from "@inertiajs/vue3";
@@ -10,10 +10,6 @@ import "vuetify/styles";
 import { createVuetify } from "vuetify";
 import * as components from "vuetify/components";
 import * as directives from "vuetify/directives";
-/* ASTUCE PERFORMANCE : Si ton PC rame vraiment, 
-   on pourrait importer les icônes via un CDN dans le HTML, 
-   mais gardons cet import JS pour l'instant.
-*/
 import "@mdi/font/css/materialdesignicons.css";
 
 const vuetify = createVuetify({
@@ -50,6 +46,6 @@ createInertiaApp({
     },
     progress: {
         color: "#00796B",
-        showSpinner: false, // Désactive le spinner pour gagner un peu de fluide sur Acer
+        showSpinner: false,
     },
 });

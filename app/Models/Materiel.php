@@ -15,27 +15,21 @@ class Materiel extends Model
     protected $table = 'materiels';
 
     protected $fillable = [
-        'nom',
+        'modele_materiel_id',
         'numero_serie',
         'categorie_id',
         'reception_id',
         'etat',
-        'statut',        // neuf, utilisé, en_panne
+        'statut',
         'demande_id',
         'service_id',
         'scan_contrat',
         'description'
+        // 'nom' a été supprimé ici car il est maintenant dans 'modele_materiels'
     ];
 
-    /**
-     * Charger systématiquement la catégorie et les pièces pour le frontend
-     */
-    protected $with = ['categorie', 'pieces'];
-
-    /**
-     * Rend les attributs calculés disponibles pour Vue.js
-     */
-    protected $appends = ['est_disponible', 'est_complet'];
+    protected $with = ['categorie:id,nom', 'pieces', 'demande:id,service_beneficiaire,demandeur_nom', 'modele'];
+    protected $appends = ['est_disponible'];
 
     protected $casts = [
         'created_at' => 'datetime:d/m/Y H:i',
@@ -43,23 +37,31 @@ class Materiel extends Model
         'demande_id' => 'integer',
         'service_id' => 'integer',
         'categorie_id' => 'integer',
+        'modele_materiel_id' => 'integer',
     ];
+
+    protected static function booted()
+    {
+        static::deleting(function ($materiel) {
+            $materiel->pieces()->delete();
+        });
+    }
 
     // --- RELATIONS ---
 
+    public function modele(): BelongsTo
+    {
+        return $this->belongsTo(ModeleMateriel::class, 'modele_materiel_id');
+    }
+
     public function pieces(): HasMany
     {
-        return $this->hasMany(PieceMateriel::class, 'materiel_id');
+        return $this->hasMany(PieceMateriel::class, 'materiel_id')->orderBy('nom_piece');
     }
 
     public function demande(): BelongsTo
     {
         return $this->belongsTo(Demande::class, 'demande_id');
-    }
-
-    public function service(): BelongsTo
-    {
-        return $this->belongsTo(Service::class, 'service_id');
     }
 
     public function reception(): BelongsTo
@@ -72,49 +74,30 @@ class Materiel extends Model
         return $this->belongsTo(Categorie::class, 'categorie_id');
     }
 
-// --- ACCESSEURS & SCOPES ---
+    // --- ACCESSEURS OPTIMISÉS ---
 
-/**
- * Le matériel est disponible tant qu'il est logistiquement en stock.
- * Même "En panne", il peut être livré (ex: pour réparation ou rebut).
- */
-public function getEstDisponibleAttribute(): bool
-{
-    return $this->etat === 'Disponible';
-}
+    public function getEstDisponibleAttribute(): bool
+    {
+        return $this->etat === 'Disponible' || $this->etat === 'En stock';
+    }
 
-/**
- * Vérifie si toutes les pièces sont encore présentes
- */
-public function getEstCompletAttribute(): bool
-{
-    if ($this->pieces->isEmpty()) return true;
+    public function getEstCompletAttribute(): bool
+    {
+        return $this->pieces->every('statut', 'En Stock');
+    }
+    // --- SCOPES DE RECHERCHE ---
 
-    return $this->pieces->where('statut', 'En Stock')->count() === $this->pieces->count();
-}
-
-/**
- * Filtre pour le stock (utilisé dans le create du controller)
- */
-public function scopeEnStock(Builder $query): void
-{
-    $query->where('etat', 'Disponible');
-}
-
-/**
- * Filtre par état logistique (Disponible, En attente, Livré)
- */
-public function scopeParLogistique(Builder $query, string $etat): void
-{
-    $query->where('etat', $etat);
-}
-
-/**
- * Filtre par statut physique (Neuf, En panne, Utilisé)
- */
-public function scopeParStatutPhysique(Builder $query, string $statut): void
-{
-    $query->where('statut', $statut);
-}
-
+    public function scopeRechercher(Builder $query, $term): void
+    {
+        if ($term) {
+            $query->where(function ($q) use ($term) {
+                // CORRECTION : On ne cherche plus dans 'nom' (inexistant dans materiels)
+                // mais on cherche dans le modèle associé
+                $q->where('numero_serie', 'ilike', "%{$term}%")
+                  ->orWhereHas('modele', function ($q2) use ($term) {
+                      $q2->where('nom', 'ilike', "%{$term}%"); // Utilise la nouvelle colonne 'nom'
+                  });
+            });
+        }
+    }
 }

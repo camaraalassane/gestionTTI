@@ -12,13 +12,18 @@ class ParametreController extends Controller
     /**
      * Affiche la page des paramètres avec la liste complète.
      */
-    public function index()
-    {
-        return Inertia::render('materiel/parametres', [
-            'categories' => Categorie::latest()->get(),
-            'services'   => Service::latest()->get(),
-        ]);
-    }
+   public function index()
+{
+    return Inertia::render('materiel/parametres', [
+        // On compte les relations directement en SQL (très rapide)
+        'categories' => Categorie::withCount('materiels')
+            ->orderBy('nom')
+            ->get(),
+        'services' => Service::withCount('materiels')
+            ->orderBy('nom')
+            ->get(),
+    ]);
+}
 
     /**
      * Ajouter une nouvelle catégorie.
@@ -65,16 +70,21 @@ class ParametreController extends Controller
     /**
      * Supprimer un service (avec vérification de dépendance).
      */
-    public function destroyService($id)
-    {
-        $service = Service::findOrFail($id);
+   public function destroyService($id)
+{
+    $service = Service::findOrFail($id);
 
-        // Vérifier si des matériels ou demandes sont liés à ce service
-        if ($service->materiels()->exists()) {
-            return redirect()->back()->withErrors(['error' => 'Impossible de supprimer : du matériel est affecté à ce service.']);
-        }
+    // Vérifier les matériels ET les demandes (même archivées)
+    $hasMateriels = $service->materiels()->exists();
+    $hasDemandes = \App\Models\Demande::where('service_beneficiaire', $service->nom)->exists();
 
-        $service->delete();
-        return redirect()->back()->with('success', 'Service supprimé.');
+    if ($hasMateriels || $hasDemandes) {
+        return redirect()->back()->withErrors([
+            'error' => 'Impossible de supprimer : ce service possède du matériel ou un historique de demandes.'
+        ]);
     }
+
+    $service->delete();
+    return redirect()->back()->with('success', 'Service supprimé.');
+}
 }

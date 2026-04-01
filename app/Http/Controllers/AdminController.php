@@ -101,9 +101,10 @@ public function revokeCode(User $user)
 // 1. Afficher la liste des supprimés
 public function listTrash()
 {
-    $deletedItems = DB::table('materiel_supprimes') // Note: vérifiez l'orthographe de votre table
+    // On utilise DB::table car c'est une table de log sans modèle Eloquent
+    $deletedItems = DB::table('materiel_supprimes')
         ->orderBy('supprime_le', 'desc')
-        ->get();
+        ->paginate(20); // Toujours paginer pour l'admin
 
     return Inertia::render('Admin/TrashList', [
         'items' => $deletedItems
@@ -113,49 +114,51 @@ public function listTrash()
 // 2. Réinsérer dans la table 'materiels'
 public function restoreFromTrash($id)
 {
-    $item = DB::table('materiel_supprimes')->where('id', $id)->first();
+    return DB::transaction(function () use ($id) {
+        $item = DB::table('materiel_supprimes')->where('id', $id)->first();
 
-    if ($item) {
-        // Protection : si le nom de catégorie est vide, on met 'Général' ou ID 1
+        if (!$item) {
+            return back()->with('error', 'Matériel introuvable.');
+        }
+
+        // 1. Gestion Catégorie
         $categorie = DB::table('categories')->where('nom', $item->categorie)->first();
         $categorieId = $categorie ? $categorie->id : 1;
 
-        // On cherche une réception pour ce fournisseur créée AUJOURD'HUI
+        // 2. Gestion Réception (On évite de créer 1000 réceptions de restauration)
+        $receptionId = DB::table('receptions')->updateOrInsert(
+            [
+                'fournisseur' => $item->fournisseur ?? 'TECH NSI',
+                'date_livraison' => now()->toDateString(),
+                'numero_contrat' => 'RESTORE-' . date('Ymd')
+            ],
+            [
+                'categorie_id' => $categorieId,
+                'updated_at' => now()
+            ]
+        );
+
+        // Comme updateOrInsert ne retourne pas l'ID, on le récupère
         $reception = DB::table('receptions')
-            ->where('fournisseur', $item->fournisseur)
-            ->whereDate('date_livraison', now()->toDateString())
+            ->where('numero_contrat', 'RESTORE-' . date('Ymd'))
             ->first();
 
-        if ($reception) {
-            DB::table('receptions')->where('id', $reception->id)->increment('unite');
-            $receptionId = $reception->id;
-        } else {
-            $receptionId = DB::table('receptions')->insertGetId([
-                'fournisseur'    => $item->fournisseur ?? 'TECH NSI',
-                'numero_contrat' => 'RESTORE-' . date('Ymd'),
-                'date_livraison' => now()->toDateString(),
-                'categorie_id'   => $categorieId,
-                'nbrcarton'      => 0,
-                'unite'          => 1,
-            ]);
-        }
-
+        // 3. Réinsertion
         DB::table('materiels')->insert([
             'nom'           => $item->nom,
             'numero_serie'  => $item->numero_serie,
-            'etat'          => 'neuf',
-            'reception_id'  => $receptionId,
+            'etat'          => 'Réintégré',
+            'reception_id'  => $reception->id,
             'categorie_id'  => $categorieId,
             'created_at'    => now(),
             'updated_at'    => now(),
         ]);
 
+        // 4. Nettoyage
         DB::table('materiel_supprimes')->where('id', $id)->delete();
-        
-        return back()->with('success', 'Matériel réintégré au stock avec succès.');
-    }
 
-    return back()->with('error', 'Matériel introuvable dans la corbeille.');
+        return back()->with('success', 'Matériel réintégré.');
+    });
 }
 
 
@@ -168,36 +171,30 @@ public function forceDelete($id)
 }
 public function globalDashboard()
 {
+    // On utilise le Cache pour les stats globales si le volume devient dingue
+    // Mais pour l'instant, on optimise les requêtes.
+
+    $stats = [
+        'total_materiels'    => DB::table('materiels')->count(),
+        'total_demandes'     => DB::table('demandes')->count(),
+        'services_actifs'    => DB::table('services')->count(),
+        'materiels_attribues'=> DB::table('materiels')->whereNotNull('service_id')->count(),
+    ];
+
+    // Top 5 services : On récupère tout en une fois
+    $topServices = DB::table('materiels')
+        ->join('services', 'materiels.service_id', '=', 'services.id')
+        ->select('services.nom', DB::raw('count(materiels.id) as total'))
+        ->groupBy('services.id', 'services.nom')
+        ->orderBy('total', 'desc')
+        ->limit(5)
+        ->get();
+
     return Inertia::render('Admin/GlobalStats', [
-        'stats' => [
-            'total_materiels' => DB::table('materiels')->count(),
-            'total_demandes'  => DB::table('demandes')->count(),
-            'services_actifs' => DB::table('services')->count(),
-            // Optionnel : matériels déjà attribués
-            'materiels_attribues' => DB::table('materiels')->whereNotNull('service_id')->count(),
-        ],
-
-        // Groupement des matériels par service (Information réelle d'octroi)
-        // On utilise la table 'materiels' car elle possède le 'service_id'
-        'demandes_par_service' => DB::table('materiels')
-            ->join('services', 'materiels.service_id', '=', 'services.id')
-            ->select('services.nom', DB::raw('count(*) as total'))
-            ->groupBy('services.id', 'services.nom')
-            ->get(),
-
-        // Les 5 services ayant le plus de matériel octroyé
-        'top_services' => DB::table('materiels')
-            ->join('services', 'materiels.service_id', '=', 'services.id')
-            ->select('services.nom', DB::raw('count(*) as total'))
-            ->groupBy('services.id', 'services.nom')
-            ->orderBy('total', 'desc')
-            ->limit(5)
-            ->get(),
-
-        // Si vous voulez vraiment compter les demandes par leur nom de service (champ texte)
-        // Utilisez cette version pour 'demandes_par_service' si nécessaire :
-
-        'demandes_brutes_par_service' => DB::table('demandes')
+        'stats' => $stats,
+        'top_services' => $topServices,
+        // On ne passe que les données nécessaires au graphique
+        'demandes_brutes' => DB::table('demandes')
             ->select('service_beneficiaire as nom', DB::raw('count(*) as total'))
             ->groupBy('service_beneficiaire')
             ->get(),

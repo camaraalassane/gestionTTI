@@ -1,745 +1,576 @@
 <script setup>
-import AuthenticatedLayout from "@/Layouts/AuthenticatedLayout.vue";
-import { Head, useForm } from "@inertiajs/vue3";
-import { ref, computed, watch } from "vue";
+    import AuthenticatedLayout from "@/Layouts/AuthenticatedLayout.vue";
+    import { Head, useForm } from "@inertiajs/vue3";
+    import { ref, computed, watch } from "vue";
+    import axios from "axios";
+    import { debounce } from "lodash";
 
-const props = defineProps({ categories: Array });
+    const props = defineProps({ categories: Array });
 
-// --- RÉFÉRENCES ---
-const fileInputKey = ref(0);
-const tentativeAjout = ref(false);
-const tentativeFinale = ref(false);
+    // --- RÉFÉRENCES & ÉTATS ---
+    const fileInputKey = ref(0);
+    const tentativeAjout = ref(false);
+    const tentativeFinale = ref(false);
+    const isLoadingContrat = ref(false);
+    const contratExisteDeja = ref(false);
+    const statsContrat = ref(null);
+    const snEnBaseDeDonnees = ref([]);
 
-const infosCommunes = ref({
-    fournisseur: "",
-    numero_contrat: "",
-    date_livraison: new Date().toISOString().substr(0, 10),
-    scan_contrat: null,
-});
-
-const modeVrac = ref(false);
-const articleActuel = ref({
-    categorie_id: null,
-    nbrcarton: 0,
-    unite: 0,
-    details_unites: [],
-});
-
-const panier = ref([]);
-
-// --- LOGIQUE CALCULS ---
-const totalUnitesPhysiques = computed(() => {
-    const nbrCtn = parseInt(articleActuel.value.nbrcarton) || 0;
-    const ute = parseInt(articleActuel.value.unite) || 0;
-    return modeVrac.value ? ute : nbrCtn * ute;
-});
-
-watch(totalUnitesPhysiques, (total) => {
-    const currentLength = articleActuel.value.details_unites.length;
-    if (total > currentLength) {
-        for (let i = currentLength; i < total; i++) {
-            articleActuel.value.details_unites.push({
-                nom: "",
-                numero_serie: "",
-                pieces: [],
-            });
-        }
-    } else if (total < currentLength) {
-        articleActuel.value.details_unites =
-            articleActuel.value.details_unites.slice(0, total);
-    }
-});
-
-// --- LOGIQUE PIÈCES ---
-const ajouterPiece = (idx) =>
-    articleActuel.value.details_unites[idx].pieces.push({ nom: "", sn: "" });
-const retirerPiece = (uIdx, pIdx) =>
-    articleActuel.value.details_unites[uIdx].pieces.splice(pIdx, 1);
-
-// --- VALIDATION DOUBLONS ---
-const isDuplicate = (sn, index) => {
-    if (!sn || sn.trim() === "") return false;
-    const inCurrent = articleActuel.value.details_unites.some(
-        (u, i) => u.numero_serie === sn && i !== index,
-    );
-    const inPanier = panier.value.some((p) =>
-        p.details_unites.some((u) => u.numero_serie === sn),
-    );
-    return inCurrent || inPanier;
-};
-
-// --- ACTION : AJOUTER AU PANIER ---
-const ajouterAuPanier = () => {
-    tentativeAjout.value = true;
-    const allSnFilled = articleActuel.value.details_unites.every((u) =>
-        u.numero_serie?.trim(),
-    );
-    const hasDuplicates = articleActuel.value.details_unites.some((u, i) =>
-        isDuplicate(u.numero_serie, i),
-    );
-
-    if (
-        !articleActuel.value.categorie_id ||
-        totalUnitesPhysiques.value <= 0 ||
-        !allSnFilled ||
-        hasDuplicates
-    ) {
-        return;
-    }
-
-    const cat = props.categories.find(
-        (c) => c.id === articleActuel.value.categorie_id,
-    );
-    panier.value.push({
-        ...JSON.parse(JSON.stringify(articleActuel.value)),
-        nbrcarton: modeVrac.value ? 0 : articleActuel.value.nbrcarton,
-        total_unites: totalUnitesPhysiques.value,
-        nom_categorie: cat?.nom || "Inconnue",
+    const infosCommunes = ref({
+        fournisseur: "",
+        numero_contrat: "",
+        quantite_totale_prevue: 0,
+        date_livraison: new Date().toISOString().substr(0, 10),
+        scan_contrat: null,
     });
 
-    // Reset
-    articleActuel.value = {
+    const articleActuel = ref({
+        designation: "",
         categorie_id: null,
-        nbrcarton: 0,
         unite: 0,
-        details_unites: [],
-    };
-    modeVrac.value = false;
-    tentativeAjout.value = false;
-};
+        nbr_pieces_global: 0,
+        pieces_modeles: [], // Pour stocker les noms des pièces communes
+        nbrcarton: 0,
+        details_unites: [
+            {
+                nom: "",
+                numeros_serie: [],
+            },
+        ],
+    });
 
-const form = useForm({
-    items: [],
-    fournisseur: "",
-    numero_contrat: "",
-    date_livraison: "",
-    scan_contrat: null,
+    const panier = ref([]);
+
+    // --- LOGIQUE DE GROUPAGE POUR L'AFFICHAGE ---
+    const panierGroupe = computed(() => {
+        return panier.value.reduce((acc, item) => {
+            const key = item.nom_categorie || "Inconnue";
+            if (!acc[key]) acc[key] = [];
+            acc[key].push(item);
+            return acc;
+        }, {});
+    });
+
+    // --- LOGIQUE DES PIÈCES COMMUNES (MODÈLE UNIQUE) ---
+    watch(() => articleActuel.value.nbr_pieces_global, (nouveauNbr) => {
+        const nbr = parseInt(nouveauNbr) || 0;
+        const modeles = articleActuel.value.pieces_modeles;
+
+        if (nbr > modeles.length) {
+            for (let i = modeles.length; i < nbr; i++) {
+                modeles.push({ nom: "" });
+            }
+        } else {
+            articleActuel.value.pieces_modeles = modeles.slice(0, nbr);
+        }
+        synchroniserNomsPieces();
+    });
+
+    const synchroniserNomsPieces = () => {
+        const series = articleActuel.value.details_unites[0]?.numeros_serie;
+        const modeles = articleActuel.value.pieces_modeles;
+
+        if (!series) return;
+
+        series.forEach((sn) => {
+            if (sn.pieces.length !== modeles.length) {
+                const nouvellesPieces = [];
+                modeles.forEach((m, idx) => {
+                    nouvellesPieces.push({
+                        nom: m.nom,
+                        sn: sn.pieces[idx]?.sn || ""
+                    });
+                });
+                sn.pieces = nouvellesPieces;
+            } else {
+                modeles.forEach((m, idx) => {
+                    sn.pieces[idx].nom = m.nom;
+                });
+            }
+        });
+    };
+
+    watch(() => articleActuel.value.pieces_modeles, () => {
+        synchroniserNomsPieces();
+    }, { deep: true });
+
+
+    // --- CALCULS DE VALIDATION & BANDREAU (RÉ-INJECTÉS) ---
+    const totalUnitesPhysiques = computed(() => Number(articleActuel.value.unite) || 0);
+
+    const totalUnitesDansPanier = computed(() => {
+        return panier.value.reduce((sum, item) => sum + (Number(item.total_unites) || 0), 0);
+    });
+
+    const totalRef = computed(() => {
+        return statsContrat.value
+            ? Number(statsContrat.value.total)
+            : Number(infosCommunes.value.quantite_totale_prevue) || 0;
+    });
+
+    // C'est ce calcul qui alimente ton bandeau HTML
+    const resteARecevoir = computed(() => {
+        const totalPrevu = totalRef.value;
+        const dejaRecuBase = Number(statsContrat.value?.deja_recu) || 0;
+
+        // On ne soustrait PLUS 'dansPanier' ici
+        return totalPrevu - dejaRecuBase;
+    });
+
+    // Pour l'alerte d'erreur en bas du bandeau
+    const resteDynamique = computed(() => {
+        return resteARecevoir.value - totalUnitesPhysiques.value;
+    });
+    const surplusDetecte = computed(() => {
+        if (totalRef.value <= 0) return false;
+        // Ici, on vérifie : Déjà en base + Déjà dans le panier + Ce qu'on veut ajouter maintenant
+        const cumulTotal = (Number(statsContrat.value?.deja_recu) || 0) + totalUnitesDansPanier.value + totalUnitesPhysiques.value;
+        return cumulTotal > totalRef.value;
+    });
+
+
+    // --- VÉRIFICATION S/N EN BASE (DEBOUNCE) ---
+    const verifierSnEnBase = debounce(async (sn) => {
+        if (!sn || sn.length < 3) return;
+        try {
+            const response = await axios.get(`/check-sn/${sn}`);
+            if (response.data.exists) {
+                if (!snEnBaseDeDonnees.value.includes(sn)) {
+                    snEnBaseDeDonnees.value.push(sn);
+                }
+            } else {
+                snEnBaseDeDonnees.value = snEnBaseDeDonnees.value.filter((s) => s !== sn);
+            }
+        } catch (error) {
+            console.error("Erreur S/N:", error);
+        }
+    }, 500);
+
+    // --- VÉRIFICATION DU CONTRAT ---
+    watch(() => infosCommunes.value.numero_contrat, async (newVal) => {
+        if (!newVal || newVal.length <= 2) {
+            contratExisteDeja.value = false;
+            statsContrat.value = null;
+            return;
+        }
+        isLoadingContrat.value = true;
+        try {
+            const response = await axios.get(route("reception.check", { numero: newVal }));
+            if (response.data.exists) {
+                contratExisteDeja.value = true;
+                infosCommunes.value.fournisseur = response.data.fournisseur;
+                infosCommunes.value.quantite_totale_prevue = Number(response.data.total_prevu);
+
+                // On stocke le scan existant dans infosCommunes pour le renvoyer au serveur si besoin
+                infosCommunes.value.ancien_scan_path = response.data.scan_contrat;
+
+                statsContrat.value = {
+                    deja_recu: Number(response.data.deja_recu) || 0,
+                    stock_dispo: Number(response.data.stock_dispo) || 0,
+                    total: Number(response.data.total_prevu) || 0,
+                    reste: Number(response.data.reste) || 0,
+                    // On peut aussi passer le scan aux stats pour l'affichage
+                    scan_existant: response.data.scan_contrat
+                };
+            } else {
+                contratExisteDeja.value = false;
+                statsContrat.value = null;
+                infosCommunes.value.ancien_scan_path = null;
+            }
+        } catch (error) {
+            console.error("Erreur contrat:", error);
+        } finally {
+            isLoadingContrat.value = false;
+        }
+    });
+
+    // --- DOUBLONS & ERREURS ---
+    const isDuplicate = (sn) => {
+        if (!sn || sn.trim() === "") return false;
+        const serieBase = articleActuel.value.details_unites[0]?.numeros_serie;
+        if (!serieBase) return false;
+        const formattedSn = sn.trim().toLowerCase();
+        const localOccurrences = serieBase.filter((s) => s?.valeur?.trim().toLowerCase() === formattedSn).length;
+        return localOccurrences > 1 || snEnBaseDeDonnees.value.includes(sn);
+    };
+
+  // --- VALIDATION SIMPLIFIÉE (Plus de S/N à vérifier) ---
+const aDesErreursDansLeLot = computed(() => {
+    const art = articleActuel.value;
+    // On vérifie juste les champs obligatoires
+    if (!art.designation || !art.categorie_id || totalUnitesPhysiques.value <= 0) return true;
+    
+    // Si des pièces sont demandées, on vérifie qu'elles ont un nom
+    if (art.nbr_pieces_global > 0) {
+        return art.pieces_modeles.some(m => !m.nom || m.nom.trim() === "");
+    }
+    return false;
 });
 
-const submitFinal = () => {
-    tentativeFinale.value = true;
-    if (
-        !infosCommunes.value.fournisseur ||
-        !infosCommunes.value.numero_contrat ||
-        panier.value.length === 0
-    ) {
-        return;
+    // --- GÉNÉRATION DES LIGNES S/N ---
+   watch(totalUnitesPhysiques, (nouveauTotal) => {
+    if (!articleActuel.value.details_unites[0]) {
+        articleActuel.value.details_unites[0] = { nom: articleActuel.value.designation, numeros_serie: [] };
     }
-    Object.assign(form, infosCommunes.value);
-    form.items = panier.value;
-    form.post(route("materiel.store_group"), {
-        forceFormData: true,
-        onSuccess: () => {
-            panier.value = [];
-            form.reset();
-            fileInputKey.value++;
-            tentativeFinale.value = false;
-        },
-    });
-};
+    const listeSN = articleActuel.value.details_unites[0].numeros_serie;
+    
+    if (nouveauTotal > listeSN.length) {
+        for (let i = listeSN.length; i < nouveauTotal; i++) {
+            // On pousse des objets vides, le Controller s'occupera du reste
+            listeSN.push({ valeur: "", pieces: [] }); 
+        }
+        synchroniserNomsPieces();
+    } else {
+        articleActuel.value.details_unites[0].numeros_serie = listeSN.slice(0, nouveauTotal);
+    }
+});
 
-const handleFileUpload = (e) => {
-    infosCommunes.value.scan_contrat = e.target.files[0];
-};
+    // --- GESTION DU PANIER ---
+    const ajouterAuPanier = () => {
+        tentativeAjout.value = true;
+        if (aDesErreursDansLeLot.value || surplusDetecte.value) return;
+
+        const cat = props.categories.find((c) => c.id === articleActuel.value.categorie_id);
+        const articleAInserer = JSON.parse(JSON.stringify(articleActuel.value));
+
+        panier.value.push({
+            ...articleAInserer,
+            total_unites: totalUnitesPhysiques.value,
+            nom_categorie: cat?.nom || "Inconnue",
+        });
+
+        articleActuel.value = {
+            designation: "", categorie_id: null, unite: 0, nbr_pieces_global: 0, pieces_modeles: [], nbrcarton: 0,
+            details_unites: [{ nom: "", numeros_serie: [] }],
+        };
+        snEnBaseDeDonnees.value = [];
+        tentativeAjout.value = false;
+    };
+
+    const retirerDuPanier = (article) => {
+        const index = panier.value.indexOf(article);
+        if (index > -1) panier.value.splice(index, 1);
+    };
+
+    // --- SOUMISSION FINALE ---
+    const form = useForm({
+        items: [], fournisseur: "", numero_contrat: "", quantite_totale_prevue: 0, date_livraison: "", scan_contrat: null, ancien_scan_path: null,
+    });
+
+    const submitFinal = () => {
+        tentativeFinale.value = true;
+        if (!infosCommunes.value.fournisseur || !infosCommunes.value.numero_contrat || panier.value.length === 0) return;
+        form.ancien_scan_path = infosCommunes.value.ancien_scan_path;
+        Object.assign(form, infosCommunes.value);
+        form.items = panier.value;
+
+        form.post(route("materiel.store_group"), {
+            forceFormData: true,
+            onSuccess: () => {
+                panier.value = [];
+                infosCommunes.value = {
+                    fournisseur: "", numero_contrat: "", quantite_totale_prevue: 0,
+                    date_livraison: new Date().toISOString().substr(0, 10), scan_contrat: null,
+                };
+                form.reset();
+                fileInputKey.value++;
+                tentativeFinale.value = false;
+                statsContrat.value = null;
+                contratExisteDeja.value = false;
+            },
+        });
+    };
+
+    const handleFileUpload = (e) => {
+        infosCommunes.value.scan_contrat = e.target.files[0];
+    };
+
+    watch(() => articleActuel.value.designation, (newVal) => {
+        if (articleActuel.value.details_unites[0]) {
+            articleActuel.value.details_unites[0].nom = newVal;
+        }
+    });
 </script>
 
 <template>
+
     <Head title="Réception de Stock" />
 
     <AuthenticatedLayout>
-        <v-container
-            fluid
-            class="pa-4 bg-teal-lighten-5 custom-font min-vh-100 d-flex flex-column"
-        >
-            <v-card
-                class="mb-4 rounded-xl shadow-card border-teal-top flex-shrink-0"
-                elevation="0"
-            >
-                <v-card-text class="pa-4">
-                    <v-row dense>
-                        <v-col cols="12" md="3">
-                            <v-text-field
-                                v-model="infosCommunes.fournisseur"
-                                label="Fournisseur"
-                                variant="outlined"
-                                color="teal-darken-1"
-                                density="compact"
-                                :error="
-                                    tentativeFinale &&
-                                    !infosCommunes.fournisseur
-                                "
-                                hide-details="auto"
-                                class="custom-field"
-                            ></v-text-field>
+        <v-container fluid class="pa-4 bg-teal-lighten-5 custom-font min-vh-100 d-flex flex-column">
+            <v-card class="mb-4 rounded-xl shadow-card border-teal-top flex-shrink-0" elevation="0">
+                <v-card-text class="pa-3">
+                    <v-row dense align="center">
+                        <v-col cols="12" md="2">
+                            <v-text-field v-model="infosCommunes.fournisseur" label="Fournisseur" variant="outlined" color="teal-darken-1" density="compact" :readonly="contratExisteDeja" hide-details="auto" class="text-caption"></v-text-field>
                         </v-col>
-                        <v-col cols="12" md="3">
-                            <v-text-field
-                                v-model="infosCommunes.numero_contrat"
-                                label="N° Contrat / BC"
-                                variant="outlined"
-                                color="teal-darken-1"
-                                density="compact"
-                                :error="
-                                    tentativeFinale &&
-                                    !infosCommunes.numero_contrat
-                                "
-                                hide-details="auto"
-                                class="custom-field"
-                            ></v-text-field>
+
+                        <v-col cols="12" md="2">
+                            <v-text-field v-model="infosCommunes.numero_contrat" label="N° Contrat / BC" variant="outlined" color="teal-darken-1" density="compact" :loading="isLoadingContrat" hide-details="auto" class="text-caption font-weight-black"></v-text-field>
                         </v-col>
+
                         <v-col cols="12" md="3">
-                            <v-file-input
-                                :key="fileInputKey"
-                                label="Scan document"
-                                variant="outlined"
-                                color="teal-darken-1"
-                                density="compact"
-                                hide-details="auto"
-                                class="custom-field"
-                                prepend-icon=""
-                                prepend-inner-icon="mdi-paperclip"
-                                @change="handleFileUpload"
-                            ></v-file-input>
+                            <div v-if="statsContrat" class="d-flex align-center bg-grey-lighten-4 pa-2 rounded-lg border" style="height: 40px;">
+                                <div class="flex-grow-1 text-center border-right">
+                                    <div style="font-size: 0.65rem; color: #666; font-weight: bold;">TOTAL PRÉVU</div>
+                                    <div class="font-weight-black text-teal-darken-3" style="font-size: 0.9rem;">{{ statsContrat?.total || 0 }}</div>
+                                </div>
+                                <div class="flex-grow-1 text-center border-right">
+                                    <div style="font-size: 0.65rem; color: #666; font-weight: bold;">DÉJÀ REÇU</div>
+                                    <div class="font-weight-black text-blue-darken-2" style="font-size: 0.9rem;">{{ statsContrat?.deja_recu || 0 }}</div>
+                                </div>
+                                <div class="flex-grow-1 text-center">
+                                    <div style="font-size: 0.65rem; color: #666; font-weight: bold;">RESTE</div>
+                                    <div class="font-weight-black" :class="resteARecevoir <= 0 ? 'text-red-darken-2' : 'text-orange-darken-3'" style="font-size: 0.9rem;">{{ resteARecevoir }}</div>
+                                </div>
+                            </div>
+                            <v-text-field v-else v-model.number="infosCommunes.quantite_totale_prevue" label="Qté Totale Prévue" type="number" variant="outlined" color="teal-darken-1" density="compact" hide-details="auto" class="text-caption font-weight-bold"></v-text-field>
                         </v-col>
+
                         <v-col cols="12" md="3">
-                            <v-text-field
-                                v-model="infosCommunes.date_livraison"
-                                type="date"
-                                label="Date Réception"
-                                variant="outlined"
-                                color="teal-darken-1"
-                                density="compact"
-                                hide-details="auto"
-                                class="custom-field"
-                            ></v-text-field>
+                            <v-file-input :key="fileInputKey" :label="infosCommunes.ancien_scan_path ? 'Scan déjà présent (Cliquer pour changer)' : 'Scan document'" variant="outlined" :color="infosCommunes.ancien_scan_path ? 'blue-darken-1' : 'teal-darken-1'" density="compact" hide-details="auto" class="text-caption" prepend-inner-icon="mdi-paperclip" @change="handleFileUpload">
+                                <template v-if="infosCommunes.ancien_scan_path" v-slot:append-inner>
+                                    <v-icon color="success" icon="mdi-check-circle"></v-icon>
+                                </template>
+                            </v-file-input>
+                        </v-col>
+
+                        <v-col cols="12" md="2">
+                            <v-text-field v-model="infosCommunes.date_livraison" type="date" label="Date" variant="outlined" color="teal-darken-1" density="compact" hide-details="auto" class="text-caption"></v-text-field>
                         </v-col>
                     </v-row>
                 </v-card-text>
             </v-card>
 
-            <v-row class="flex-grow-1 mb-2" no-gutters style="min-height: 0">
-                <v-col
-                    cols="12"
-                    md="7"
-                    class="pr-md-2 d-flex flex-column"
-                    style="height: 80vh"
-                >
-                    <v-card
-                        elevation="0"
-                        class="rounded-xl shadow-card border overflow-hidden d-flex flex-column h-100"
-                    >
-                        <v-toolbar
-                            color="teal-darken-1"
-                            density="compact"
-                            flat
-                            class="flex-shrink-0"
-                        >
-                            <v-icon size="small" class="ml-4 mr-2"
-                                >mdi-package-variant-closed</v-icon
-                            >
-                            <v-toolbar-title
-                                class="text-caption font-weight-bold uppercase"
-                                >CONFIGURATION DU LOT</v-toolbar-title
-                            >
-                            <v-spacer></v-spacer>
-                            <v-btn-toggle
-                                v-model="modeVrac"
-                                mandatory
-                                density="compact"
-                                class="mr-4 custom-toggle-fixed"
-                                selected-class="bg-white text-teal-darken-1"
-                            >
-                                <v-btn
-                                    :value="false"
-                                    size="x-small"
-                                    class="toggle-btn"
-                                    >CARTONS</v-btn
-                                >
-                                <v-btn
-                                    :value="true"
-                                    size="x-small"
-                                    class="toggle-btn"
-                                    >VRAC</v-btn
-                                >
-                            </v-btn-toggle>
+            <v-row v-if="!statsContrat || resteARecevoir > 0 || panier.length > 0" class="flex-grow-1 mb-2" no-gutters style="min-height: 0">
+                <v-col cols="12" md="7" class="pr-md-2 d-flex flex-column" style="height: 84vh">
+        <v-card elevation="0" class="rounded-xl shadow-card border overflow-hidden d-flex flex-column h-100">
+            <v-toolbar color="teal-darken-2" density="compact" flat>
+                <v-icon size="x-small" class="ml-4 mr-2">mdi-auto-fix</v-icon>
+                <v-toolbar-title class="text-caption font-weight-bold">SAISIE RAPIDE (GÉNÉRATION AUTO)</v-toolbar-title>
+            </v-toolbar>
+
+            <div class="pa-4 bg-white border-b">
+                <v-row dense>
+                    <v-col cols="3">
+                        <v-text-field v-model.number="articleActuel.unite" type="number" label="Quantité" variant="outlined" color="teal" density="compact" hide-details class="font-weight-black"></v-text-field>
+                    </v-col>
+                    <v-col cols="3">
+                        <v-text-field v-model.number="articleActuel.nbr_pieces_global" type="number" label="Pièces / Unité" variant="outlined" color="teal" density="compact" hide-details></v-text-field>
+                    </v-col>
+                    <v-col cols="6">
+                        <v-text-field v-model="articleActuel.designation" label="Désignation" variant="outlined" color="teal" density="compact" hide-details class="font-weight-bold"></v-text-field>
+                    </v-col>
+                    <v-col cols="12" class="mt-2">
+                        <v-autocomplete v-model="articleActuel.categorie_id" :items="categories" item-title="nom" item-value="id" label="Catégorie" variant="outlined" color="teal" density="compact" hide-details></v-autocomplete>
+                    </v-col>
+                </v-row>
+
+                <v-expand-transition>
+                    <div v-if="articleActuel.nbr_pieces_global > 0" class="mt-4 pa-3 bg-teal-lighten-5 rounded-lg border border-teal-lighten-4">
+                        <div class="text-caption font-weight-bold text-teal-darken-3 mb-2">NOMMER LES PIÈCES (CHARGEUR, SOURIS...) :</div>
+                        <v-row dense>
+                            <v-col v-for="(mod, mi) in articleActuel.pieces_modeles" :key="mi" cols="4">
+                                <v-text-field v-model="mod.nom" :label="'Nom Pièce ' + (mi + 1)" density="compact" variant="solo" hide-details flat bg-color="white" class="border rounded"></v-text-field>
+                            </v-col>
+                        </v-row>
+                    </div>
+                </v-expand-transition>
+            </div>
+
+            <div class="flex-grow-1 overflow-y-auto bg-grey-lighten-4 pa-4">
+                <div v-if="articleActuel.unite > 0">
+                    <v-alert v-if="surplusDetecte" type="error" variant="tonal" class="mb-4 text-caption">
+                        Attention : Vous dépassez la quantité prévue au contrat !
+                    </v-alert>
+
+                    <v-alert v-else color="teal-darken-1" icon="mdi-information" variant="tonal" class="text-caption">
+                        Vous allez générer <strong>{{ articleActuel.unite }}</strong> matériels. 
+                        Le système créera automatiquement les numéros de série.
+                    </v-alert>
+
+                    <div class="mt-4 d-flex align-center justify-space-between bg-white pa-4 rounded-xl border">
+                        <div>
+                            <div class="text-caption text-grey">Reste après ajout :</div>
+                            <div class="text-h6 font-weight-black" :class="resteDynamique < 0 ? 'text-red' : 'text-teal'">
+                                {{ resteDynamique }} unités
+                            </div>
+                        </div>
+                        <v-icon size="large" :color="resteDynamique < 0 ? 'red' : 'teal'">mdi-calculator</v-icon>
+                    </div>
+                </div>
+            </div>
+
+            <v-card-actions class="pa-3 border-t bg-white">
+                <v-btn block :disabled="aDesErreursDansLeLot || surplusDetecte" color="teal-darken-2" variant="elevated" @click="ajouterAuPanier">
+                    VALIDER ET AJOUTER AU PANIER
+                </v-btn>
+            </v-card-actions>
+        </v-card>
+    </v-col>
+
+                <v-col cols="12" md="5" class="pl-md-2 d-flex flex-column mb-4" style="height: 82vh">
+                    <v-card elevation="0" class="rounded-xl shadow-card border overflow-hidden d-flex flex-column h-100">
+                        <v-toolbar color="teal-darken-2" density="compact" flat class="flex-shrink-0">
+                            <v-icon size="small" class="ml-4 mr-2">mdi-clipboard-list-outline</v-icon>
+                            <v-toolbar-title class="text-caption font-weight-bold">RÉCAPITULATIF</v-toolbar-title>
+                            <v-chip size="x-small" class="mr-4 font-weight-black" color="white" variant="flat">{{ panier.length }} LOTS</v-chip>
                         </v-toolbar>
 
-                        <div class="pa-4 bg-white border-b flex-shrink-0">
-                            <v-row dense align="center">
-                                <v-col cols="12" md="4">
-                                    <v-autocomplete
-                                        v-model="articleActuel.categorie_id"
-                                        :items="categories"
-                                        item-title="nom"
-                                        item-value="id"
-                                        label="Catégorie"
-                                        variant="outlined"
-                                        color="teal-darken-1"
-                                        density="compact"
-                                        hide-details="auto"
-                                        class="custom-field"
-                                    ></v-autocomplete>
-                                </v-col>
-
-                                <v-col cols="4" md="2">
-                                    <v-text-field
-                                        v-if="!modeVrac"
-                                        v-model.number="articleActuel.nbrcarton"
-                                        type="number"
-                                        label="Nb Cartons"
-                                        variant="outlined"
-                                        color="teal-darken-1"
-                                        density="compact"
-                                        hide-details="auto"
-                                        class="custom-field center-input"
-                                    ></v-text-field>
-                                    <div v-else style="height: 40px"></div>
-                                </v-col>
-
-                                <v-col cols="4" md="3">
-                                    <v-text-field
-                                        v-model.number="articleActuel.unite"
-                                        type="number"
-                                        :label="
-                                            modeVrac
-                                                ? 'Total Unités'
-                                                : 'Uté/Ctn'
-                                        "
-                                        variant="outlined"
-                                        color="teal-darken-1"
-                                        density="compact"
-                                        hide-details="auto"
-                                        class="custom-field center-input"
-                                    ></v-text-field>
-                                </v-col>
-
-                                <v-col cols="4" md="3">
-                                    <div
-                                        :class="
-                                            modeVrac
-                                                ? 'total-badge-vrac'
-                                                : 'total-badge-teal'
-                                        "
-                                        class="d-flex align-center justify-center"
-                                        style="
-                                            height: 40px;
-                                            white-space: nowrap;
-                                        "
-                                    >
-                                        <v-icon size="x-small" class="mr-1"
-                                            >mdi-sigma</v-icon
-                                        >
-                                        TOTAL: {{ totalUnitesPhysiques }}
-                                    </div>
-                                </v-col>
-                            </v-row>
-                        </div>
-
-                        <div
-                            class="flex-grow-1 overflow-y-auto bg-teal-lighten-5 pa-3"
-                            style="max-height: 100%"
-                        >
-                            <v-expansion-panels
-                                v-if="totalUnitesPhysiques > 0"
-                                variant="accordion"
-                                class="custom-panels"
-                            >
-                                <v-expansion-panel
-                                    v-for="(
-                                        u, i
-                                    ) in articleActuel.details_unites"
-                                    :key="i"
-                                    class="mb-2 rounded-lg border overflow-hidden"
-                                    elevation="0"
-                                >
-                                    <v-expansion-panel-title
-                                        class="py-2 px-4 bg-white"
-                                    >
-                                        <div class="d-flex align-center w-100">
-                                            <v-chip
-                                                size="x-small"
-                                                color="teal-darken-1"
-                                                variant="flat"
-                                                class="mr-3 font-weight-bold"
-                                                >UNITÉ {{ i + 1 }}</v-chip
-                                            >
-                                            <span
-                                                :class="
-                                                    u.numero_serie
-                                                        ? 'text-teal-darken-3'
-                                                        : 'text-grey-darken-1'
-                                                "
-                                                class="text-caption font-weight-bold"
-                                            >
-                                                {{
-                                                    u.numero_serie ||
-                                                    "Saisir le N° de Série..."
-                                                }}
-                                            </span>
-                                            <v-spacer></v-spacer>
-                                            <v-icon
-                                                v-if="
-                                                    isDuplicate(
-                                                        u.numero_serie,
-                                                        i,
-                                                    ) ||
-                                                    (tentativeAjout &&
-                                                        !u.numero_serie)
-                                                "
-                                                color="red"
-                                                size="small"
-                                                class="mr-2"
-                                                >mdi-alert-circle</v-icon
-                                            >
-                                            <v-chip
-                                                v-if="u.pieces.length"
-                                                size="x-small"
-                                                color="orange-darken-2"
-                                                variant="tonal"
-                                                class="font-weight-bold"
-                                                >{{
-                                                    u.pieces.length
-                                                }}
-                                                PCS</v-chip
-                                            >
-                                        </div>
-                                    </v-expansion-panel-title>
-
-                                    <v-expansion-panel-text
-                                        class="bg-white border-t"
-                                    >
-                                        <v-row dense class="pt-2">
-                                            <v-col cols="6"
-                                                ><v-text-field
-                                                    v-model="u.nom"
-                                                    label="Désignation"
-                                                    color="teal-darken-1"
-                                                    variant="underlined"
-                                                    density="compact"
-                                                    class="small-text"
-                                                ></v-text-field
-                                            ></v-col>
-                                            <v-col cols="6"
-                                                ><v-text-field
-                                                    v-model="u.numero_serie"
-                                                    label="N° de Série"
-                                                    color="teal-darken-1"
-                                                    variant="underlined"
-                                                    density="compact"
-                                                    prepend-inner-icon="mdi-barcode-scan"
-                                                    class="small-text"
-                                                ></v-text-field
-                                            ></v-col>
-                                        </v-row>
-
-                                        <div
-                                            class="mt-2 pa-2 rounded-lg border-dashed-teal bg-teal-lighten-5"
-                                        >
-                                            <div
-                                                class="d-flex justify-space-between align-center mb-1"
-                                            >
-                                                <span
-                                                    class="text-overline text-teal-darken-3 font-weight-bold"
-                                                    style="
-                                                        font-size: 0.65rem !important;
-                                                    "
-                                                    >PIÈCES</span
-                                                >
-                                                <v-btn
-                                                    size="x-small"
-                                                    color="teal-darken-1"
-                                                    variant="flat"
-                                                    @click="ajouterPiece(i)"
-                                                    class="rounded-pill"
-                                                    height="20"
-                                                >
-                                                    + Ajouter
-                                                </v-btn>
-                                            </div>
-
-                                            <v-row
-                                                v-for="(p, pi) in u.pieces"
-                                                :key="pi"
-                                                dense
-                                                align="center"
-                                                class="mb-1"
-                                            >
-                                                <v-col cols="5">
-                                                    <v-text-field
-                                                        v-model="p.nom"
-                                                        placeholder="Nom"
-                                                        variant="solo"
-                                                        density="compact"
-                                                        flat
-                                                        hide-details
-                                                        class="compact-input"
-                                                    ></v-text-field>
-                                                </v-col>
-                                                <v-col cols="5">
-                                                    <v-text-field
-                                                        v-model="p.sn"
-                                                        placeholder="S/N"
-                                                        variant="solo"
-                                                        density="compact"
-                                                        flat
-                                                        hide-details
-                                                        class="compact-input"
-                                                    ></v-text-field>
-                                                </v-col>
-                                                <v-col
-                                                    cols="2"
-                                                    class="text-right"
-                                                >
-                                                    <v-btn
-                                                        icon="mdi-close-circle"
-                                                        size="x-small"
-                                                        variant="text"
-                                                        color="red-darken-2"
-                                                        @click="
-                                                            retirerPiece(i, pi)
-                                                        "
-                                                        density="comfortable"
-                                                    ></v-btn>
-                                                </v-col>
-                                            </v-row>
-                                        </div>
-                                    </v-expansion-panel-text>
-                                </v-expansion-panel>
-                            </v-expansion-panels>
-                            <div
-                                v-else
-                                class="d-flex flex-column align-center justify-center fill-height text-teal-lighten-3"
-                            >
-                                <v-icon size="64">mdi-package-variant</v-icon>
-                                <p class="text-caption mt-2">
-                                    Définissez une quantité pour commencer
-                                </p>
+                        <div class="flex-grow-1 overflow-y-auto bg-grey-lighten-4">
+                            <div v-for="(articles, nomCat) in panierGroupe" :key="nomCat">
+                                <div class="pa-2 px-4 bg-teal-lighten-5 border-b text-caption font-weight-black text-teal-darken-4 uppercase">{{ nomCat }}</div>
+                                <v-list class="pa-0 bg-transparent">
+                                    <v-list-item v-for="(p, idx) in articles" :key="idx" class="bg-white border-b pa-3">
+                                        <v-list-item-title class="text-caption font-weight-bold">{{ p.designation }}</v-list-item-title>
+                                        <v-list-item-subtitle class="text-xxs">{{ p.total_unites }} Unités</v-list-item-subtitle>
+                                        <template v-slot:append>
+                                            <v-btn icon="mdi-delete-outline" size="x-small" color="red" variant="text" @click="retirerDuPanier(p)"></v-btn>
+                                        </template>
+                                    </v-list-item>
+                                </v-list>
                             </div>
                         </div>
 
-                        <v-card-actions
-                            class="pa-4 border-t bg-white flex-shrink-0"
-                        >
-                            <v-btn
-                                block
-                                color="teal-darken-1"
-                                size="large"
-                                variant="elevated"
-                                @click="ajouterAuPanier"
-                                class="rounded-xl font-weight-bold shadow-teal"
-                            >
-                                <v-icon start>mdi-plus-box</v-icon> AJOUTER CE
-                                LOT AU RÉCAPITULATIF
-                            </v-btn>
-                        </v-card-actions>
+                        <div class="pa-3 bg-white border-t">
+    <v-expand-transition>
+        <div v-if="panier.length > 0 && !infosCommunes.fournisseur" class="mb-3">
+            <v-alert type="warning" density="compact" variant="tonal" class="text-xxs">
+                Veuillez renseigner le <strong>fournisseur</strong> avant de finaliser.
+            </v-alert>
+        </div>
+    </v-expand-transition>
+
+    <v-expand-transition>
+        <div v-if="panier.length > 0 && !infosCommunes.numero_contrat" class="mb-3">
+            <v-alert type="warning" density="compact" variant="tonal" class="text-xxs">
+                Le <strong>numéro de contrat</strong> est obligatoire.
+            </v-alert>
+        </div>
+    </v-expand-transition>
+
+    <v-btn 
+        block 
+        color="teal-darken-2" 
+        height="54" 
+        @click="submitFinal" 
+        :loading="form.processing" 
+        :disabled="panier.length === 0 || !infosCommunes.fournisseur || !infosCommunes.numero_contrat" 
+        class="rounded-xl font-weight-black shadow-teal"
+    >
+        FINALISER L'ENREGISTREMENT
+    </v-btn>
+</div>
                     </v-card>
                 </v-col>
+            </v-row>
 
-                <v-col
-                    cols="12"
-                    md="5"
-                    class="pl-md-2 d-flex flex-column"
-                    style="height: 80vh"
-                >
-                    <v-card
-                        elevation="0"
-                        class="rounded-xl shadow-card border overflow-hidden d-flex flex-column h-100"
-                    >
-                        <v-toolbar
-                            color="teal-darken-2"
-                            density="compact"
-                            flat
-                            class="flex-shrink-0"
-                        >
-                            <v-icon size="small" class="ml-4 mr-2"
-                                >mdi-clipboard-list-outline</v-icon
-                            >
-                            <v-toolbar-title
-                                class="text-caption font-weight-bold"
-                                >RÉCAPITULATIF PRÊT À L'ENVOI</v-toolbar-title
-                            >
-                            <v-chip
-                                size="x-small"
-                                class="mr-4 font-weight-black"
-                                color="white"
-                                variant="flat"
-                                text-color="teal-darken-2"
-                                >{{ panier.length }} LOTS</v-chip
-                            >
-                        </v-toolbar>
-
-                        <div
-                            class="flex-grow-1 overflow-y-auto bg-white"
-                            style="max-height: 100%"
-                        >
-                            <v-alert
-                                v-if="tentativeFinale && panier.length === 0"
-                                type="error"
-                                variant="tonal"
-                                class="ma-3 rounded-lg text-caption"
-                            >
-                                Votre panier est vide.
-                            </v-alert>
-
-                            <v-list v-if="panier.length" class="pa-0">
-                                <v-list-item
-                                    v-for="(p, idx) in panier"
-                                    :key="idx"
-                                    class="border-b pa-4 hover-item-teal"
-                                >
-                                    <template v-slot:prepend>
-                                        <v-avatar
-                                            color="teal-darken-1"
-                                            size="40"
-                                            class="shadow-sm"
-                                        >
-                                            <v-icon color="white" size="small"
-                                                >mdi-layers-triple</v-icon
-                                            >
-                                        </v-avatar>
-                                    </template>
-                                    <v-list-item-title
-                                        class="text-caption font-weight-black text-teal-darken-3"
-                                        >{{
-                                            p.nom_categorie
-                                        }}</v-list-item-title
-                                    >
-                                    <v-list-item-subtitle
-                                        class="text-caption mt-1"
-                                    >
-                                        <v-chip
-                                            size="x-small"
-                                            variant="outlined"
-                                            color="teal"
-                                            class="mr-1"
-                                            >{{ p.total_unites }} Unités</v-chip
-                                        >
-                                        <v-chip
-                                            v-if="p.nbrcarton > 0"
-                                            size="x-small"
-                                            variant="outlined"
-                                            color="teal"
-                                            >{{ p.nbrcarton }} Cartons</v-chip
-                                        >
-                                    </v-list-item-subtitle>
-                                    <template v-slot:append>
-                                        <v-btn
-                                            icon="mdi-delete-outline"
-                                            size="small"
-                                            color="red-darken-1"
-                                            variant="text"
-                                            @click="panier.splice(idx, 1)"
-                                        ></v-btn>
-                                    </template>
-                                </v-list-item>
-                            </v-list>
-                        </div>
-
-                        <v-card-actions
-                            class="pa-4 border-t bg-teal-lighten-5 flex-shrink-0"
-                        >
-                            <v-btn
-                                block
-                                color="teal-darken-2"
-                                size="x-large"
-                                @click="submitFinal"
-                                :loading="form.processing"
-                                class="rounded-xl font-weight-black shadow-teal"
-                            >
-                                <v-icon start size="small"
-                                    >mdi-cloud-check</v-icon
-                                >
-                                FINALISER L'ENREGISTREMENT
-                            </v-btn>
-                        </v-card-actions>
+            <v-row v-else class="flex-grow-1 mb-2 align-center justify-center" no-gutters>
+                <v-col cols="12" md="8" class="text-center">
+                    <v-card variant="flat" class="pa-10 rounded-xl bg-grey-lighten-4 border-dashed border-grey-darken-1">
+                        <v-icon size="80" color="grey-darken-1" class="mb-4">mdi-lock-outline</v-icon>
+                        <h2 class="text-h5 font-weight-black text-grey-darken-3 mb-2">SAISIE IMPOSSIBLE</h2>
+                        <p class="text-body-2 text-grey-darken-1 mb-6">Le contrat {{ infosCommunes.numero_contrat }} est totalement soldé ({{ statsContrat?.total }} reçus).</p>
+                        <v-btn color="teal-darken-2" variant="text" @click="infosCommunes.numero_contrat = ''">Changer de contrat</v-btn>
                     </v-card>
                 </v-col>
             </v-row>
         </v-container>
     </AuthenticatedLayout>
 </template>
-
 <style scoped>
-.compact-input :deep(.v-field__input) {
-    min-height: 32px !important;
-    padding-top: 5px !important;
-    padding-bottom: 5px !important;
-    font-size: 0.8rem !important;
-}
-.custom-font {
-    font-family: "Inter", sans-serif !important;
-}
 
-/* Fixation de la hauteur pour que les deux colonnes soient identiques */
+    /* GARDONS TES RÉGLAGES DE TAILLE POUR LES CHAMPS */
+    .custom-compact-field :deep(.v-field__input) {
+        min-height: 40px !important;
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+        font-size: 0.85rem;
+    }
 
-/* Gestion du scroll interne */
-.overflow-y-auto {
-    overflow-y: auto;
-}
+    /* FUSION DES DEUX .compact-input EN UN SEUL PROPRE */
+    .compact-input :deep(.v-field__input) {
+        min-height: 32px !important;
+        padding-top: 5px !important;
+        padding-bottom: 5px !important;
+        font-size: 0.8rem !important;
+    }
 
-.shadow-card {
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04) !important;
-}
-.shadow-teal {
-    box-shadow: 0 4px 12px rgba(0, 137, 123, 0.25) !important;
-}
-.border-teal-top {
-    border-top: 4px solid #00897b !important;
-}
+    .custom-font {
+        font-family: "Inter", sans-serif !important;
+    }
 
-/* Empêche les colonnes de s'écraser */
-.v-container {
-    height: 100vh;
-}
+    /* GESTION DU SCROLL INTERNE */
+    .overflow-y-auto {
+        overflow-y: auto;
+    }
 
-.total-badge-teal,
-.total-badge-vrac {
-    padding: 8px;
-    font-weight: 900;
-    border-radius: 12px;
-    font-size: 0.7rem;
-    text-align: center;
-}
-.total-badge-teal {
-    background: #e0f2f1;
-    color: #00695c;
-    border: 2px solid #00897b;
-}
-.total-badge-vrac {
-    background: #fff3e0;
-    color: #e65100;
-    border: 2px solid #fb8c00;
-}
+    .shadow-card {
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04) !important;
+    }
 
-.custom-toggle {
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    background: rgba(0, 0, 0, 0.1);
-}
+    .shadow-teal {
+        box-shadow: 0 4px 12px rgba(0, 137, 123, 0.25) !important;
+    }
 
-.overflow-y-auto::-webkit-scrollbar {
-    width: 5px;
-}
-.overflow-y-auto::-webkit-scrollbar-thumb {
-    background: #b2dfdb;
-    border-radius: 10px;
-}
-/* Fixer la largeur des boutons de switch */
-.toggle-btn {
-    min-width: 80px !important; /* Force une largeur égale pour les deux boutons */
-}
+    .border-teal-top {
+        border-top: 4px solid #00897b !important;
+    }
 
-/* Forcer le badge total à ne pas changer de taille selon le nombre */
-.total-badge-teal,
-.total-badge-vrac {
-    min-width: 100px;
-    height: 40px !important; /* Aligné sur la hauteur des text-fields compact */
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
+    /* REMISE À L'ÉTAT INITIAL DE TON CONTAINER */
+    .v-container {
+        height: 100vh;
+    }
 
-/* Optionnel : aligner parfaitement les inputs */
-.custom-field :deep(.v-input__control) {
-    height: 40px !important;
-}
+    .total-badge-teal,
+    .total-badge-vrac {
+        padding: 8px;
+        font-weight: 900;
+        border-radius: 12px;
+        font-size: 0.7rem;
+        text-align: center;
+        min-width: 200px !important;
+        height: 45px !important;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .total-badge-teal {
+        background: #f1f5f9 !important;
+        /* Gris très clair */
+        border: 1px solid #e2e8f0 !important;
+        /* Bordure fine et discrète */
+        box-shadow: none !important;
+        /* On enlève l'ombre pour plus de platitude */
+    }
+
+    .total-badge-vrac {
+        background: #fff3e0;
+        color: #e65100;
+        border: 2px solid #fb8c00;
+    }
+
+    .custom-toggle {
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        background: rgba(0, 0, 0, 0.1);
+    }
+
+    .overflow-y-auto::-webkit-scrollbar {
+        width: 5px;
+    }
+
+    .overflow-y-auto::-webkit-scrollbar-thumb {
+        background: #b2dfdb;
+        border-radius: 10px;
+    }
+
+    .toggle-btn {
+        min-width: 80px !important;
+    }
+
+    /* AJOUT POUR L'ALIGNEMENT DES INPUTS SANS CASSER LE RESTE */
+    .custom-field :deep(.v-input__control) {
+        height: 40px !important;
+    }
 </style>

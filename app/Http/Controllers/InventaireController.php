@@ -8,186 +8,178 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
 use Inertia\Inertia;
 use Barryvdh\DomPDF\Facade\Pdf;
+use Carbon\Carbon;
 
 class InventaireController extends Controller
 {
     public function index()
     {
+        $historique = Inventaire::with('user:id,name')
+            ->orderBy('annee', 'desc')
+            ->get()
+            ->map(function ($inv) {
+                return [
+                    'id' => $inv->id,
+                    'annee' => $inv->annee,
+                    'date_cloture' => $inv->date_cloture,
+                    'created_at' => $inv->created_at,
+                    'total_items' => $inv->total_items,
+                    'user' => $inv->user?->name ?? 'Système',
+                ];
+            });
+
         return Inertia::render('materiel/InventaireIndex', [
-            'historique' => Inventaire::with('user:id,name')
-                ->orderBy('annee', 'desc')
-                ->get()
+            'historique' => $historique,
+            'flash' => [
+                'success' => session('success'),
+                'error' => session('error'),
+            ],
         ]);
     }
 
     public function store(Request $request)
-{
-    $request->validate([
-        'annee' => 'required|unique:inventaires,annee'
-    ]);
+    {
+        $request->validate([
+            'annee' => 'required|string|size:4|unique:inventaires,annee',
+        ]);
 
-    try {
-        DB::transaction(function () use ($request) {
-            // 1. Récupère uniquement le matériel au magasin
-            $materiels = Materiel::with('pieces')->whereNull('service_id')->get();
+        try {
+            return DB::transaction(function () use ($request) {
+                $materielsCount = Materiel::whereNull('service_id')
+                    ->whereNull('demande_id')
+                    ->count();
 
-            if ($materiels->isEmpty()) {
-                throw new \Exception("Aucun matériel en stock (magasin) à inventorier.");
-            }
+                if ($materielsCount === 0) {
+                    return back()->withErrors(['annee' => 'Aucun matériel en stock à archiver.']);
+                }
 
-            // 2. Création de l'entête
-            $inventaire = Inventaire::create([
-                'annee' => $request->annee,
-                'date_cloture' => now(),
-                'total_items' => $materiels->count(),
-                'user_id' => Auth::id(),
-            ]);
+                $inventaire = Inventaire::create([
+                    'annee' => $request->annee,
+                    'date_cloture' => now(),
+                    'total_items' => 0,
+                    'user_id' => Auth::id(),
+                ]);
 
-            // 3. Préparer les détails (Capture uniquement le nom propre)
-            $data = [];
-            foreach ($materiels as $m) {
-                // On n'ajoute PLUS les parenthèses ici, car le front-end 
-                // s'occupe déjà d'afficher le nombre de pièces via la relation.
-                $data[] = [
-                    'inventaire_id' => $inventaire->id,
-                    'designation'   => $m->nom, // NOM PROPRE UNIQUEMENT
-                    'numero_serie'  => $m->numero_serie,
-                    'etat_materiel' => $m->etat,
-                    'localisation'  => 'MAGASIN',
-                    'created_at'    => now(),
-                    'updated_at'    => now(),
-                ];
-            }
+                $totalCount = 0;
+                Materiel::whereNull('service_id')
+                    ->whereNull('demande_id')
+                    ->with('modele:id,nom')
+                    ->select('id', 'modele_materiel_id', 'numero_serie', 'etat')
+                    ->chunk(200, function ($materiels) use ($inventaire, &$totalCount) {
+                        $data = [];
+                        foreach ($materiels as $m) {
+                            $data[] = [
+                                'inventaire_id' => $inventaire->id,
+                                'designation'   => $m->modele ? $m->modele->nom : 'N/A', 
+                                'numero_serie'  => $m->numero_serie,
+                                'etat_materiel' => $m->etat,
+                                'localisation'  => 'MAGASIN',
+                                'created_at'    => now(),
+                                'updated_at'    => now(),
+                            ];
+                            $totalCount++;
+                        }
+                        InventaireDetail::insert($data);
+                    });
 
-            // 4. Insertion massive
-            DB::table('inventaire_details')->insert($data);
-        });
+                $inventaire->update(['total_items' => $totalCount]);
 
-        return back()->with('success', "L'inventaire {$request->annee} a été archivé avec succès.");
-
-    } catch (\Exception $e) {
-        return back()->withErrors(['annee' => $e->getMessage()]);
+                return redirect()->back()->with('success', "Inventaire {$request->annee} archivé avec succès ({$totalCount} lignes).");
+            });
+        } catch (\Exception $e) {
+            return back()->withErrors(['annee' => "Erreur lors de l'archivage : " . $e->getMessage()]);
+        }
     }
-}
 
-public function show($id)
-{
-    $inventaire = Inventaire::with('user:id,name')->findOrFail($id);
+    public function show($id)
+    {
+        $inventaire = Inventaire::with('user:id,name')->findOrFail($id);
+        $details = InventaireDetail::where('inventaire_id', $id)->orderBy('id')->paginate(50)->withQueryString();
+        $sns = $details->pluck('numero_serie')->filter()->values()->toArray();
 
-    $details = InventaireDetail::where('inventaire_id', $id)
-        ->get()
-        ->map(function ($detail) {
-            $materiel = Materiel::with(['reception', 'categorie', 'pieces'])
-                ->where('numero_serie', $detail->numero_serie)
-                ->first();
+        $materielsAssocies = collect();
+        if (!empty($sns)) {
+            $materielsAssocies = Materiel::with([
+                'modele:id,nom',
+                'reception' => fn($q) => $q->select('id', 'fournisseur', 'numero_contrat', 'contrat_id'),
+                'reception.contrat' => fn($q) => $q->select('id', 'fournisseur', 'numero_contrat'),
+                'categorie:id,nom',
+                'pieces' => fn($q) => $q->select('id', 'materiel_id', 'nom_piece', 'statut', 'demande_id'),
+                'pieces.demande:id,service_beneficiaire,demandeur_nom',
+                'demande:id,service_beneficiaire,demandeur_nom'
+            ])->whereIn('numero_serie', $sns)->get()->keyBy('numero_serie');
+        }
 
-            $derniereDemande = null;
-            if ($materiel) {
-                $derniereDemande = DB::table('demandes')
-                    ->where('materiel_id', $materiel->id)
-                    ->orderBy('created_at', 'desc')
-                    ->first();
+        $details->getCollection()->transform(function ($detail) use ($materielsAssocies) {
+            $m = $materielsAssocies->get($detail->numero_serie);
+            if (!$m) return ['id' => $detail->id, 'designation' => $detail->designation, 'numero_serie' => $detail->numero_serie, 'categorie' => 'N/A', 'etat_materiel' => $detail->etat_materiel, 'localisation' => $detail->localisation, 'fournisseur' => 'N/A', 'numero_contrat' => 'N/A', 'pieces' => [], 'demande' => null];
+
+            $fournisseur = $m->reception->fournisseur ?? 'N/A';
+            $numeroContrat = $m->reception->numero_contrat ?? 'N/A';
+            if ($m->reception?->contrat && $fournisseur === 'N/A') {
+                $fournisseur = $m->reception->contrat->fournisseur ?? 'N/A';
+                $numeroContrat = $m->reception->contrat->numero_contrat ?? 'N/A';
             }
 
             return [
-                'id'             => $detail->id,
-                // CORRECTION ICI : On coupe la chaîne à la première parenthèse et on nettoie les espaces
-                'designation'    => trim(explode('(', $detail->designation)[0]),
-                
-                'numero_serie'   => $detail->numero_serie,
-                'etat_materiel'  => $detail->etat_materiel,
-                'localisation'   => $detail->localisation,
-                'fournisseur'    => $materiel?->reception?->fournisseur ?? 'N/A',
-                'numero_contrat' => $materiel?->reception?->numero_contrat ?? 'N/A',
-                'categorie'      => $materiel?->categorie?->nom ?? 'NON CLASSÉ',
-                'est_complet'    => $materiel ? $materiel->est_complet : true,
-                
-                'demande'        => $derniereDemande ? [
-                    'demandeur' => $derniereDemande->demandeur_nom,
-                    'service'   => $derniereDemande->service_beneficiaire,
-                    'statut'    => $derniereDemande->statut
-                ] : null,
-
-                'pieces'         => $materiel?->pieces->map(function($p) {
-                    $demandePiece = null;
-                    if ($p->demande_id) {
-                        $demandePiece = DB::table('demandes')->where('id', $p->demande_id)->first();
-                    }
-                    return [
-                        'id'           => $p->id,
-                        'nom'          => $p->nom_piece,
-                        'numero_serie' => $p->numero_serie,
-                        'demande'      => $demandePiece ? [
-                            'service' => $demandePiece->service_beneficiaire
-                        ] : null
-                    ];
-                }) ?? []
+                'id' => $detail->id,
+                'designation' => $detail->designation,
+                'numero_serie' => $detail->numero_serie,
+                'categorie' => $m->categorie?->nom ?? 'N/A',
+                'etat_materiel' => $detail->etat_materiel,
+                'localisation' => $detail->localisation,
+                'fournisseur' => $fournisseur,
+                'numero_contrat' => $numeroContrat,
+                'pieces' => collect($m->pieces)->map(fn($p) => ['nom' => $p->nom_piece, 'demande' => $p->demande ? ['service' => $p->demande->service_beneficiaire] : null]),
+                'demande' => $m->demande ? ['service' => $m->demande->service_beneficiaire, 'demandeur' => $m->demande->demandeur_nom] : null,
             ];
         });
 
-    return Inertia::render('materiel/InventaireShow', [
-        'inventaire' => $inventaire,
-        'details'    => $details
-    ]);
-}
- public function downloadPdf($id)
-{
-    $inventaire = Inventaire::with(['user'])->findOrFail($id);
+        return Inertia::render('materiel/InventaireShow', [
+            'inventaire' => ['id' => $inventaire->id, 'annee' => $inventaire->annee, 'date_cloture' => $inventaire->date_cloture, 'total_items' => $inventaire->total_items, 'responsable' => $inventaire->user?->name ?? 'Système'],
+            'details' => $details,
+        ]);
+    }
 
-    $details = InventaireDetail::where('inventaire_id', $id)->get()->map(function($d) {
-        // 1. On cherche le matériel lié par numéro de série
-        $m = \App\Models\Materiel::with(['reception', 'pieces', 'categorie'])
-            ->where('numero_serie', $d->numero_serie)
-            ->first();
+    public function downloadPdf($id)
+    {
+        $inventaire = Inventaire::with('user')->findOrFail($id);
+        $details = InventaireDetail::where('inventaire_id', $id)->get();
+        $sns = $details->pluck('numero_serie')->filter()->values()->toArray();
 
-        // 2. On cherche la dernière demande pour le matériel principal
-        $derniereDemande = null;
-        if ($m) {
-            $derniereDemande = DB::table('demandes')
-                ->where('materiel_id', $m->id)
-                ->orderBy('created_at', 'desc')
-                ->first();
+        $materiels = collect();
+        if (!empty($sns)) {
+            $materiels = Materiel::with(['modele:id,nom', 'reception:id,fournisseur,numero_contrat', 'categorie:id,nom', 'pieces.demande', 'demande'])
+                ->whereIn('numero_serie', $sns)->get()->keyBy('numero_serie');
         }
 
-        // 3. On prépare les données pour le PDF (Format tableau pour Blade)
-        return [
-            'designation'    => $d->designation,
-            'numero_serie'   => $d->numero_serie,
-            'etat_materiel'  => $d->etat_materiel,
-            'fournisseur'    => $m?->reception?->fournisseur ?? 'N/A',
-            'numero_contrat' => $m?->reception?->numero_contrat ?? 'N/A',
-            'categorie'      => $m?->categorie?->nom ?? 'NON CLASSÉ',
-            
-            // Infos de demande (Demandeur / Service)
-            'demande' => $derniereDemande ? [
-                'demandeur' => $derniereDemande->demandeur_nom,
-                'service'   => $derniereDemande->service_beneficiaire
-            ] : null,
+        $detailsTransformes = $details->map(function ($detail) use ($materiels) {
+            $m = $materiels->get($detail->numero_serie);
+            return [
+                'designation' => $detail->designation,
+                'numero_serie' => $detail->numero_serie,
+                'categorie' => $m?->categorie?->nom ?? 'N/A',
+                'etat_materiel' => $detail->etat_materiel,
+                'fournisseur' => $m?->reception->fournisseur ?? 'N/A',
+                'numero_contrat' => $m?->reception->numero_contrat ?? 'N/A',
+                'localisation' => $detail->localisation,
+                'pieces' => collect($m->pieces ?? [])->map(fn($p) => ['nom' => $p->nom_piece, 'demande' => $p->demande ? ['service' => $p->demande->service_beneficiaire] : null])->toArray(),
+                'demande' => $m?->demande ? ['service' => $m->demande->service_beneficiaire, 'demandeur' => $m->demande->demandeur_nom] : null,
+            ];
+        });
 
-            // Liste des pièces avec leurs propres demandes
-            'pieces' => $m?->pieces->map(function($p) {
-                $demandePiece = null;
-                if ($p->demande_id) {
-                    $demandePiece = DB::table('demandes')->where('id', $p->demande_id)->first();
-                }
-                return [
-                    'nom'     => $p->nom_piece,
-                    'demande' => $demandePiece ? ['service' => $demandePiece->service_beneficiaire] : null
-                ];
-            })->toArray() ?? []
+        // CORRECTION : La clé 'date' est bien ajoutée ici pour la vue Blade
+        $data = [
+            'title' => "INVENTAIRE - " . $inventaire->annee,
+            'inventaire' => $inventaire,
+            'details' => $detailsTransformes,
+            'responsable' => $inventaire->user?->name ?? 'Système',
+            'date' => now(), // Variable transmise à la vue
+            'total_lignes' => $detailsTransformes->count(),
         ];
-    });
 
-    $data = [
-        'inventaire'  => $inventaire,
-        'title'       => "INVENTAIRE MAGASIN " . $inventaire->annee,
-        'date'        => $inventaire->date_cloture ?? now(),
-        'responsable' => $inventaire->user->name,
-        'details'     => $details // C'est maintenant une collection de tableaux
-    ];
-
-    return \Barryvdh\DomPDF\Facade\Pdf::loadView('pdf.inventaire', $data)
-        ->setPaper('a4', 'landscape')
-        ->download("Inventaire_{$inventaire->annee}.pdf");
-}
+        return Pdf::loadView('pdf.inventaire', $data)
+            ->setPaper('a4', 'landscape')
+            ->download("Inventaire_{$inventaire->annee}.pdf");
+    }
 }

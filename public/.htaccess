@@ -1,3 +1,10 @@
+# Augmenter le temps d'exécution à 5 minutes pour éviter le plantage
+<IfModule mod_php7.c>
+   php_value max_execution_time 300
+</IfModule>
+<IfModule mod_php.c>
+   php_value max_execution_time 300
+</IfModule>
 <IfModule mod_rewrite.c>
     <IfModule mod_negotiation.c>
         Options -MultiViews -Indexes

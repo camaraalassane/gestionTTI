@@ -13,7 +13,7 @@ body {
     overflow-x: hidden;
 }
 
-/* Éviter les soulignages bleus moches sur les liens Inertia */
+/* Éviter les soulignages bleus sur les liens Inertia */
 a {
     text-decoration: none !important;
     color: inherit;
@@ -43,4 +43,11 @@ a {
 ::-webkit-scrollbar-thumb {
     background: #00796b;
     border-radius: 10px;
+}
+
+/* FIX POUR LES ICONES (Lenteur PC Acer) */
+@font-face {
+  font-family: "Material Design Icons";
+  src: url("/build/assets/materialdesignicons-webfont-Dp5v-WZN.woff2?v=7.4.47") format("woff2");
+  font-display: swap;
 }

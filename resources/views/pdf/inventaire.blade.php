@@ -1,199 +1,448 @@
 <!DOCTYPE html>
-<html>
+<html lang="fr">
 <head>
     <meta charset="UTF-8">
+    <title>{{ $title ?? 'Inventaire' }}</title>
     <style>
-        @page { 
-            margin: 1cm; 
-        }
-        body { 
-            font-family: sans-serif; 
-            font-size: 9px; 
-            color: #000;
-            line-height: 1.2;
-        }
-        
-        /* En-tête du document */
-        .header-table { 
-            width: 100%; 
-            border-bottom: 2px solid #000; 
-            margin-bottom: 15px; 
-            padding-bottom: 5px; 
-        }
-        
-        /* Table des données */
-        .data-table { 
-            width: 100%; 
-            border-collapse: collapse; 
-            table-layout: fixed; 
-            margin-bottom: 10px;
-        }
-        .data-table th { 
-            background: #ffffff; 
-            border: 1px solid #000; 
-            padding: 5px; 
-            font-size: 8px; 
-            text-transform: uppercase;
-        }
-        .data-table td { 
-            border: 1px solid #000; 
-            padding: 4px; 
-            vertical-align: top; 
-            word-wrap: break-word; 
+        /* ===== STYLES GÉNÉRAUX ===== */
+        @page {
+            margin: 1.5cm 1cm 1.5cm 1cm;
         }
 
-        /* Groupement Niveau 1 : FOURNISSEUR + CONTRAT (Gris très clair pour l'économie d'encre) */
-        .supplier-header { 
-            background-color: #f2f2f2 !important; 
-            font-weight: bold; 
-            font-size: 10px; 
+        body {
+            font-family: 'Helvetica', 'Arial', sans-serif;
+            font-size: 9px;
+            line-height: 1.3;
+            color: #000;
+            margin: 0;
+            padding: 0;
+        }
+
+        /* ===== EN-TÊTE DU DOCUMENT ===== */
+        .document-header {
+            width: 100%;
+            border-bottom: 2px solid #000;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+        }
+
+        .document-title {
+            font-size: 16px;
+            font-weight: bold;
+            text-transform: uppercase;
+            margin: 0 0 5px 0;
+        }
+
+        .document-meta {
+            display: flex;
+            justify-content: space-between;
+            font-size: 8px;
+            color: #333;
+        }
+
+        /* ===== INFORMATIONS DE CLÔTURE ===== */
+        .info-section {
+            background-color: #f8f8f8;
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            font-size: 9px;
+        }
+
+        .info-item {
+            display: inline-block;
+        }
+
+        .info-label {
+            font-weight: bold;
+            margin-right: 5px;
+        }
+
+        /* ===== TABLEAU PRINCIPAL ===== */
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+            table-layout: fixed;
+        }
+
+        .data-table th {
+            background-color: #e0e0e0;
+            border: 1px solid #000;
+            padding: 8px 5px;
+            font-size: 8px;
+            font-weight: bold;
+            text-transform: uppercase;
             text-align: left;
-            padding: 6px 8px !important;
+        }
+
+        .data-table td {
+            border: 1px solid #000;
+            padding: 6px 5px;
+            vertical-align: top;
+            word-wrap: break-word;
+        }
+
+        /* ===== LIGNES DE GROUPEMENT ===== */
+        .group-header-supplier {
+            background-color: #d3d3d3 !important;
+            font-weight: bold;
+            font-size: 10px;
+            padding: 8px 5px !important;
             border: 2px solid #000 !important;
         }
 
-        /* Groupement Niveau 2 : CATEGORIE (Italique) */
-        .category-header { 
-            background-color: #ffffff !important;
-            font-weight: bold; 
+        .group-header-category {
+            background-color: #f0f0f0 !important;
+            font-weight: bold;
             font-style: italic;
-            font-size: 9px; 
-            padding: 4px 4px 4px 20px !important;
-            border-right: 1px solid #000 !important;
+            font-size: 9px;
+            padding: 6px 5px 6px 20px !important;
             border-left: 1px solid #000 !important;
+            border-right: 1px solid #000 !important;
         }
 
-        /* Liste des pièces / accessoires */
-        .piece-list { margin-top: 2px; padding-left: 10px; }
-        .piece-item { display: block; font-size: 7.5px; color: #333; }
+        /* ===== GROUPEMENT PAR MATÉRIEL ===== */
+        .materiel-group {
+            background-color: #fafafa !important;
+            font-weight: bold;
+            font-size: 9px;
+            padding: 5px 5px 5px 30px !important;
+            border-left: 1px solid #000 !important;
+            border-right: 1px solid #000 !important;
+        }
 
-        /* BLOC SIGNATURES COMPACT (Seulement à la fin) */
-        .footer-signatures {
-            margin-top: 15px;
+        /* ===== AFFICHAGE DES NUMÉROS DE SÉRIE ===== */
+        .serie-list {
+            margin-top: 2px;
+            padding-left: 15px;
+        }
+
+        .serie-item {
+            display: block;
+            font-family: monospace;
+            font-size: 8px;
+            color: #333;
+            margin-bottom: 1px;
+        }
+
+        /* ===== AFFICHAGE DES PIÈCES ===== */
+        .pieces-container {
+            margin-top: 3px;
+            padding-left: 5px;
+        }
+
+        .piece-item {
+            display: block;
+            font-size: 7.5px;
+            color: #555;
+            margin-bottom: 1px;
+        }
+
+        .piece-badge {
+            display: inline-block;
+            background-color: #f0f0f0;
+            border: 1px solid #aaa;
+            padding: 1px 4px;
+            margin-left: 3px;
+            font-size: 6px;
+        }
+
+        /* ===== BADGES D'ÉTAT ===== */
+        .badge {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 10px;
+            font-size: 7px;
+            font-weight: bold;
+            text-align: center;
+        }
+
+        .badge-success {
+            background-color: #d4edda;
+            border: 1px solid #28a745;
+            color: #155724;
+        }
+
+        .badge-warning {
+            background-color: #fff3cd;
+            border: 1px solid #ffc107;
+            color: #856404;
+        }
+
+        .badge-stock {
+            background-color: #e0e0e0;
+            border: 1px solid #666;
+            color: #333;
+            font-weight: normal;
+        }
+
+        /* ===== PIED DE PAGE ===== */
+        .footer-section {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            font-size: 7px;
+            color: #666;
+            text-align: center;
+            border-top: 1px solid #ccc;
+            padding-top: 5px;
+        }
+
+        /* ===== SIGNATURES ===== */
+        .signatures-container {
+            margin-top: 30px;
+            page-break-inside: avoid;
             width: 100%;
-            page-break-inside: avoid; /* Empêche de couper le bloc sur deux pages */
         }
-        .sig-table { width: 100%; border-collapse: collapse; }
-        .sig-box {
+
+        .signatures-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .signature-box {
             width: 45%;
             border: 1px solid #000;
-            height: 65px; /* Hauteur réduite pour économiser de l'espace */
-            padding: 6px;
+            height: 70px;
+            padding: 8px;
             vertical-align: top;
-            font-size: 8px;
         }
-        .spacer { width: 10%; }
-        
+
+        .signature-spacer {
+            width: 10%;
+        }
+
+        .signature-title {
+            font-weight: bold;
+            font-size: 8px;
+            margin-bottom: 5px;
+        }
+
+        .signature-line {
+            margin-top: 15px;
+            font-size: 7px;
+            color: #555;
+        }
+
+        /* ===== UTILITAIRES ===== */
+        .text-left { text-align: left; }
         .text-center { text-align: center; }
-        .bold { font-weight: bold; }
+        .text-right { text-align: right; }
+        .font-bold { font-weight: bold; }
+        .font-mono { font-family: monospace; }
+        .text-uppercase { text-transform: uppercase; }
     </style>
 </head>
 <body>
 
-    <table class="header-table">
-        <tr>
-            <td>
-                <h2 style="margin:0; text-transform: uppercase;">{{ $title }}</h2>
-                <div style="margin-top: 3px;">Année d'inventaire : <strong>{{ $inventaire->annee }}</strong></div>
-            </td>
-            <td style="text-align:right;">
-                Édité le : {{ \Carbon\Carbon::parse($date)->format('d/m/Y') }}<br>
-                Responsable : {{ $responsable }}
-            </td>
-        </tr>
-    </table>
+    <!-- ===== EN-TÊTE DU DOCUMENT ===== -->
+    <div class="document-header">
+        <h1 class="document-title">INVENTAIRE DU MATÉRIEL - {{ $inventaire->annee }}</h1>
+        <div class="document-meta">
+            <span>Référence : INV-{{ $inventaire->annee }}-{{ str_pad($inventaire->id, 3, '0', STR_PAD_LEFT) }}</span>
+            <span>Édité le : {{ \Carbon\Carbon::parse($date)->format('d/m/Y H:i') }}</span>
+        </div>
+    </div>
 
+    <!-- ===== INFORMATIONS DE CLÔTURE ===== -->
+    <div class="info-section">
+        <div class="info-item">
+            <span class="info-label">Responsable clôture :</span>
+            {{ $responsable }}
+        </div>
+        <div class="info-item">
+            <span class="info-label">Date clôture :</span>
+            {{ $inventaire->date_cloture ? \Carbon\Carbon::parse($inventaire->date_cloture)->format('d/m/Y') : 'N/A' }}
+        </div>
+        <div class="info-item">
+            <span class="info-label">Total articles :</span>
+            {{ $total_lignes ?? count($details) }}
+        </div>
+    </div>
+
+    <!-- ===== TABLEAU DES MATÉRIELS ===== -->
     <table class="data-table">
         <thead>
             <tr>
-                <th width="40%">Désignation & Pièces Détachées</th>
-                <th width="20%">N° de Série</th>
-                <th width="10%">État</th>
-                <th width="30%">Localisation / Bénéficiaire</th>
+                <th width="35%">DÉSIGNATION & SÉRIES</th>
+                <th width="15%">CATÉGORIE</th>
+                <th width="10%">ÉTAT</th>
+                <th width="20%">FOURNISSEUR</th>
+                <th width="20%">LOCALISATION</th>
             </tr>
         </thead>
         <tbody>
-            @php 
-                // Groupement par Fournisseur
-                $groupedBySupplier = collect($details)->groupBy('fournisseur'); 
+            @php
+                $groupedBySupplier = collect($details)->groupBy('fournisseur');
             @endphp
 
-            @foreach($groupedBySupplier as $fournisseur => $categoryGroups)
-                @php 
-                    // On récupère le contrat une seule fois pour le groupe
-                    $firstItem = $categoryGroups->first();
-                    $contrat = $firstItem['numero_contrat'] ?? 'N/A';
-                @endphp
-                
+            @forelse($groupedBySupplier as $fournisseur => $items)
+                <!-- LIGNE DE GROUPEMENT : FOURNISSEUR -->
                 <tr>
-                    <td colspan="4" class="supplier-header">
-                        FOURNISSEUR : {{ $fournisseur ?: 'NON RENSEIGNÉ' }} 
-                        <span style="margin-left: 40px;">CONTRAT : {{ $contrat }}</span>
+                    <td colspan="5" class="group-header-supplier">
+                        <span style="margin-right: 30px;">FOURNISSEUR : {{ $fournisseur ?: 'NON RENSEIGNÉ' }}</span>
+                        @php
+                            $firstItem = $items->first();
+                        @endphp
+                        @if(!empty($firstItem['numero_contrat']) && $firstItem['numero_contrat'] !== 'N/A')
+                            <span>CONTRAT : {{ $firstItem['numero_contrat'] }}</span>
+                        @endif
                     </td>
                 </tr>
 
-                @foreach($categoryGroups->groupBy('categorie') as $categorie => $items)
+                @foreach($items->groupBy('categorie') as $categorie => $categoryItems)
+                    <!-- LIGNE DE GROUPEMENT : CATÉGORIE -->
                     <tr>
-                        <td colspan="4" class="category-header">
-                            Famille : {{ $categorie ?: 'AUTRES' }} ({{ count($items) }} matériels)
+                        <td colspan="5" class="group-header-category">
+                            CATÉGORIE : {{ $categorie ?: 'NON DÉFINIE' }} ({{ $categoryItems->count() }} article(s))
                         </td>
                     </tr>
 
-                    @foreach($items as $d)
-                    <tr>
-                        <td>
-                            <div class="bold">{{ $d['designation'] }}</div>
-                            @if(!empty($d['pieces']))
-                                <div class="piece-list">
-                                    @foreach($d['pieces'] as $p)
-                                        <span class="piece-item">
-                                            - {{ $p['nom'] }} 
-                                            @if(isset($p['demande']['service']))
-                                                (Sortie : {{ $p['demande']['service'] }})
-                                            @endif
-                                        </span>
-                                    @endforeach
+                    @php
+                        // Regrouper les matériels par nom/désignation
+                        $groupedByDesignation = $categoryItems->groupBy('designation');
+                    @endphp
+
+                    @foreach($groupedByDesignation as $designation => $designationItems)
+                        <!-- LIGNE DE GROUPEMENT : NOM DU MATÉRIEL -->
+                        <tr>
+                            <td colspan="5" class="materiel-group">
+                                {{ strtoupper($designation) }} ({{ $designationItems->count() }} exemplaire(s))
+                            </td>
+                        </tr>
+
+                        @foreach($designationItems as $item)
+                        <tr>
+                            <!-- COLONNE 1 : Désignation et Liste des séries -->
+                            <td>
+                                <!-- Liste des numéros de série -->
+                                <div class="serie-list">
+                                    <span class="serie-item">• {{ $item['numero_serie'] }}</span>
                                 </div>
-                            @endif
-                        </td>
-                        <td class="text-center" style="font-family: monospace;">{{ $d['numero_serie'] }}</td>
-                        <td class="text-center">{{ $d['etat_materiel'] }}</td>
-                        <td>
-                            @if($d['demande'])
-                                <strong>{{ $d['demande']['demandeur'] }}</strong><br>
-                                Service : {{ $d['demande']['service'] }}
-                            @else
-                                <span style="color: #444;">DISPONIBLE (MAGASIN)</span>
-                            @endif
-                        </td>
-                    </tr>
+
+                                <!-- Affichage des pièces si existantes -->
+                                @if(!empty($item['pieces']) && count($item['pieces']) > 0)
+                                    <div class="pieces-container">
+                                        <span style="font-size: 7px; font-weight: bold;">Pièces incluses:</span>
+                                        @foreach($item['pieces'] as $piece)
+                                            <span class="piece-item">
+                                                - {{ $piece['nom'] }}
+                                                @if(!empty($piece['demande']['service']))
+                                                    <span class="piece-badge">(Sortie: {{ $piece['demande']['service'] }})</span>
+                                                @endif
+                                            </span>
+                                        @endforeach
+                                    </div>
+                                @endif
+                            </td>
+
+                            <!-- COLONNE 2 : Catégorie -->
+                            <td class="text-center">
+                                {{ $item['categorie'] }}
+                            </td>
+
+                            <!-- COLONNE 3 : État -->
+                            <td class="text-center">
+                                @php
+                                    $etat = $item['etat_materiel'] ?? 'N/A';
+                                    $badgeClass = in_array($etat, ['Bon', 'Disponible', 'Neuf']) ? 'badge-success' : 'badge-warning';
+                                @endphp
+                                <span class="badge {{ $badgeClass }}">
+                                    {{ $etat }}
+                                </span>
+                            </td>
+
+                            <!-- COLONNE 4 : Fournisseur -->
+                            <td>
+                                {{ $item['fournisseur'] }}
+                            </td>
+
+                            <!-- COLONNE 5 : Localisation / Bénéficiaire -->
+                            <td>
+                                @if(!empty($item['demande']))
+                                    <span class="font-bold">{{ $item['demande']['demandeur'] }}</span><br>
+                                    <span style="font-size: 7px;">{{ $item['demande']['service'] }}</span>
+                                @else
+                                    <span class="badge badge-stock">EN STOCK</span>
+                                @endif
+                            </td>
+                        </tr>
+                        @endforeach
                     @endforeach
                 @endforeach
-            @endforeach
+            @empty
+                <tr>
+                    <td colspan="5" class="text-center" style="padding: 30px;">
+                        <span style="font-size: 11px;">AUCUN ARTICLE DANS CET INVENTAIRE</span>
+                    </td>
+                </tr>
+            @endforelse
         </tbody>
     </table>
 
-    <div class="footer-signatures">
-        <table class="sig-table">
+    <!-- ===== RÉCAPITULATIF PAR FOURNISSEUR ===== -->
+    <div style="margin-top: 15px; margin-bottom: 20px;">
+        <table style="width: 100%; border-collapse: collapse; font-size: 8px;">
+            <tr style="background-color: #e0e0e0;">
+                <th style="border: 1px solid #000; padding: 5px;">FOURNISSEUR</th>
+                <th style="border: 1px solid #000; padding: 5px;">NB ARTICLES</th>
+                <th style="border: 1px solid #000; padding: 5px;">CATÉGORIES</th>
+            </tr>
+            @php
+                $recapBySupplier = collect($details)->groupBy('fournisseur')->map(function($items, $fournisseur) {
+                    return [
+                        'fournisseur' => $fournisseur,
+                        'count' => $items->count(),
+                        'categories' => $items->pluck('categorie')->unique()->implode(', '),
+                    ];
+                });
+            @endphp
+            @foreach($recapBySupplier as $recap)
+                <tr>
+                    <td style="border: 1px solid #000; padding: 4px;">{{ $recap['fournisseur'] }}</td>
+                    <td style="border: 1px solid #000; padding: 4px; text-align: center;">{{ $recap['count'] }}</td>
+                    <td style="border: 1px solid #000; padding: 4px;">{{ $recap['categories'] }}</td>
+                </tr>
+            @endforeach
+        </table>
+    </div>
+
+    <!-- ===== SIGNATURES ===== -->
+    <div class="signatures-container">
+        <table class="signatures-table">
             <tr>
-                <td class="sig-box">
-                    <strong>Le Responsable Magasin :</strong>
-                    <br><br><br>
-                    <span style="font-size: 7px;">Signature : ..........................................</span>
+                <td class="signature-box">
+                    <div class="signature-title">LE RESPONSABLE MAGASIN</div>
+                    <div style="margin-top: 25px;">
+                        <span style="font-size: 7px;">Nom : ......................................</span>
+                    </div>
+                    <div class="signature-line">
+                        Signature : ..........................................
+                    </div>
                 </td>
-                <td class="spacer"></td>
-                <td class="sig-box">
-                    <strong>Audit / Direction :</strong>
-                    <br>
-                    <span style="font-size: 7px;">Obs : .......................................................</span>
-                    <br><br>
-                    <span style="font-size: 7px;">Cachet & Signature :</span>
+                <td class="signature-spacer"></td>
+                <td class="signature-box">
+                    <div class="signature-title">AUDIT / DIRECTION</div>
+                    <div style="margin-top: 10px;">
+                        <span style="font-size: 7px;">Observations :</span><br>
+                        <span style="font-size: 7px;">................................................................</span>
+                    </div>
+                    <div class="signature-line" style="margin-top: 15px;">
+                        Cachet & Signature :
+                    </div>
                 </td>
             </tr>
         </table>
-        <div style="text-align: center; font-size: 7px; margin-top: 5px; color: #555;">
-            Inventaire TTI - Page de clôture générée le {{ date('d/m/Y H:i') }}
-        </div>
+    </div>
+
+    <!-- ===== PIED DE PAGE ===== -->
+    <div class="footer-section">
+        <span>Inventaire TTI {{ $inventaire->annee }} - Document officiel - {{ count($details) }} articles archivés</span>
+        <span style="margin-left: 20px;">Généré le {{ date('d/m/Y H:i:s') }}</span>
     </div>
 
 </body>

@@ -1,50 +1,51 @@
 <script setup>
-import { Head, useForm, router } from '@inertiajs/vue3';
-import { computed } from 'vue';
-import AuthentDemandeLayout from '@/Layouts/AuthentDemandeLayout.vue';
+    import { Head, useForm, router } from '@inertiajs/vue3';
+    import { computed } from 'vue';
+    import AuthentDemandeLayout from '@/Layouts/AuthentDemandeLayout.vue';
 
-const props = defineProps({
-    service: String,
-    demandes: Array
-});
-
-// Initialisation du formulaire
-const form = useForm({
-    items: props.demandes.map(d => ({
-        id: d.id,
-        nom_materiel: d.nom_materiel,
-        nbredemande: d.nbredemande,
-        description: d.description || ''
-    }))
-});
-
-// Calcul du total d'articles pour vérification visuelle
-const totalArticles = computed(() => {
-    return form.items.reduce((acc, item) => acc + (Number(item.nbredemande) || 0), 0);
-});
-
-const submit = () => {
-    form.put(route('demandes.update_groupe'), {
-        onSuccess: () => {
-            // Optionnel : Notification Toast ici
-        },
-        onError: () => {
-            alert("Veuillez vérifier les quantités saisies.");
-        }
+    const props = defineProps({
+        service: String,
+        demandes: Array
     });
-};
 
-const annuler = () => {
-    if (form.isDirty && !confirm("Quitter sans enregistrer les modifications ?")) return;
-    window.history.back();
-};
+    // Initialisation du formulaire
+    const form = useForm({
+        items: props.demandes.map(d => ({
+            id: d.id,
+            nom_materiel: d.nom_materiel,
+            nbredemande: d.nbredemande,
+            description: d.description || ''
+        }))
+    });
+
+    // Calcul du total d'articles pour vérification visuelle
+    const totalArticles = computed(() => {
+        return form.items.reduce((acc, item) => acc + (Number(item.nbredemande) || 0), 0);
+    });
+
+    const submit = () => {
+        form.put(route('demandes.update_groupe'), {
+            onSuccess: () => {
+                // Optionnel : Notification Toast ici
+            },
+            onError: () => {
+                alert("Veuillez vérifier les quantités saisies.");
+            }
+        });
+    };
+
+    const annuler = () => {
+        if (form.isDirty && !confirm("Quitter sans enregistrer les modifications ?")) return;
+        window.history.back();
+    };
 </script>
 
 <template>
+
     <Head :title="'Modif. ' + service" />
     <AuthentDemandeLayout>
         <v-container fluid class="pa-6 bg-grey-lighten-4 min-vh-100">
-            
+
             <v-row class="mb-6 align-center">
                 <v-col cols="12" md="6" class="d-flex align-center">
                     <v-btn icon="mdi-close" variant="text" color="grey-darken-2" @click="annuler" class="mr-4"></v-btn>
@@ -80,30 +81,13 @@ const annuler = () => {
                                         {{ form.errors[`items.${index}.nbredemande`] }}
                                     </div>
                                 </td>
-                                
+
                                 <td>
-                                    <v-text-field 
-                                        v-model="item.nbredemande" 
-                                        type="number" 
-                                        variant="outlined" 
-                                        density="compact" 
-                                        hide-details
-                                        bg-color="white"
-                                        class="text-center font-weight-black custom-input"
-                                        min="1"
-                                    ></v-text-field>
+                                    <v-text-field v-model="item.nbredemande" type="number" variant="outlined" density="compact" hide-details bg-color="white" class="text-center font-weight-black custom-input" min="1"></v-text-field>
                                 </td>
 
                                 <td>
-                                    <v-text-field 
-                                        v-model="item.description" 
-                                        variant="outlined" 
-                                        density="compact" 
-                                        hide-details
-                                        placeholder="Taille, couleur, ou motif de modif..."
-                                        bg-color="grey-lighten-5"
-                                        class="custom-input"
-                                    ></v-text-field>
+                                    <v-text-field v-model="item.description" variant="outlined" density="compact" hide-details placeholder="Taille, couleur, ou motif de modif..." bg-color="grey-lighten-5" class="custom-input"></v-text-field>
                                 </td>
 
                                 <td class="text-center">
@@ -120,28 +104,14 @@ const annuler = () => {
                             <v-icon icon="mdi-alert-circle-outline" class="mr-2"></v-icon>
                             Modifications non enregistrées
                         </div>
-                        
+
                         <v-spacer></v-spacer>
 
-                        <v-btn 
-                            variant="text" 
-                            color="grey-darken-1" 
-                            class="mr-4 px-6" 
-                            @click="annuler"
-                        >
+                        <v-btn variant="text" color="grey-darken-1" class="mr-4 px-6" @click="annuler">
                             Abandonner
                         </v-btn>
 
-                        <v-btn 
-                            type="submit" 
-                            color="teal-darken-3" 
-                            variant="elevated" 
-                            size="x-large" 
-                            class="px-10 rounded-lg font-weight-bold shadow-teal"
-                            :loading="form.processing"
-                            :disabled="!form.isDirty"
-                            prepend-icon="mdi-check-circle"
-                        >
+                        <v-btn type="submit" color="teal-darken-3" variant="elevated" size="x-large" class="px-10 rounded-lg font-weight-bold shadow-teal" :loading="form.processing" :disabled="!form.isDirty" prepend-icon="mdi-check-circle">
                             Appliquer les changements
                         </v-btn>
                     </v-card-actions>
@@ -152,33 +122,33 @@ const annuler = () => {
 </template>
 
 <style scoped>
-.edit-table :deep(th) {
-    height: 50px !important;
-    text-transform: uppercase;
-    font-size: 0.7rem !important;
-    letter-spacing: 1px;
-}
+    .edit-table :deep(th) {
+        height: 50px !important;
+        text-transform: uppercase;
+        font-size: 0.7rem !important;
+        letter-spacing: 1px;
+    }
 
-.row-hover:hover {
-    background-color: #f0fdfa !important;
-}
+    .row-hover:hover {
+        background-color: #f0fdfa !important;
+    }
 
-.custom-input :deep(.v-field__outline) {
-    --v-field-border-opacity: 0.15;
-}
+    .custom-input :deep(.v-field__outline) {
+        --v-field-border-opacity: 0.15;
+    }
 
-.shadow-teal {
-    box-shadow: 0 4px 15px rgba(0, 77, 64, 0.3) !important;
-}
+    .shadow-teal {
+        box-shadow: 0 4px 15px rgba(0, 77, 64, 0.3) !important;
+    }
 
-.edit-table :deep(.v-field__input) {
-    font-weight: 700 !important;
-}
+    .edit-table :deep(.v-field__input) {
+        font-weight: 700 !important;
+    }
 
-/* Chrome, Safari, Edge, Opera - supprimer les flèches du input number */
-:deep(input::-webkit-outer-spin-button),
-:deep(input::-webkit-inner-spin-button) {
-  -webkit-appearance: none;
-  margin: 0;
-}
+    /* Chrome, Safari, Edge, Opera - supprimer les flèches du input number */
+    :deep(input::-webkit-outer-spin-button),
+    :deep(input::-webkit-inner-spin-button) {
+        -webkit-appearance: none;
+        margin: 0;
+    }
 </style>

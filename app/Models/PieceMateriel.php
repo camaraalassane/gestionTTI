@@ -1,14 +1,16 @@
 <?php
 
 namespace App\Models;
-
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
 class PieceMateriel extends Model
 {
+    use HasFactory;
     protected $table = 'pieces_materiels';
 
     protected $fillable = [
+        'modele_materiel_id',
         'materiel_id',
         'demande_id', // <--- TRÈS IMPORTANT : Ajoutez ceci pour permettre l'affectation
         'nom_piece',
