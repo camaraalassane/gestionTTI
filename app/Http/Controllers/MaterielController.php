@@ -50,56 +50,85 @@ class MaterielController extends Controller
         ]);
     }
 
-    /**
-     * 2. Liste détaillée (OPTIMISÉE)
-     */
-    public function list(Request $request)
-    {
-        $query = \App\Models\ModeleMateriel::query()
-            ->select('modele_materiels.*')
-            ->join('categories', 'modele_materiels.categorie_id', '=', 'categories.id')
-            ->with('categorie:id,nom');
+  /**
+ * 2. Liste détaillée (OPTIMISÉE)
+ */
 
-        // Comptage des unités en stock
-        $query->withCount([
-            'exemplaires as qte_materiel' => fn($q) => $q->whereIn('materiels.etat', ['Disponible', 'En stock'])
-        ]);
+public function list(Request $request)
+{
+    // Requête SQL directe pour récupérer les catégories avec leurs modèles
+    $results = DB::select("
+        SELECT
+            c.id as categorie_id,
+            c.nom as categorie_nom,
+            m.id as modele_id,
+            m.nom as modele_nom,
+            COUNT(CASE WHEN mat.etat IN ('Disponible', 'En stock') THEN 1 END) as qte_materiel,
+            COUNT(CASE WHEN mat.etat = 'Livré' THEN 1 END) as qte_livree,
+            COUNT(p.id) as qte_pieces
+        FROM categories c
+        LEFT JOIN modele_materiels m ON m.categorie_id = c.id
+        LEFT JOIN materiels mat ON mat.modele_materiel_id = m.id
+        LEFT JOIN pieces_materiels p ON p.materiel_id = mat.id AND p.demande_id IS NULL
+        GROUP BY c.id, c.nom, m.id, m.nom
+        HAVING COUNT(m.id) > 0
+        ORDER BY c.nom, m.nom
+    ");
 
-        // Comptage des unités livrées
-        $query->withCount([
-            'exemplaires as qte_livree' => fn($q) => $q->where('materiels.etat', 'Livré')
-        ]);
-
-        // Comptage des pièces en stock
-        $query->withCount([
-            'pieces as qte_pieces' => fn($q) => $q->whereNull('pieces_materiels.demande_id')
-        ]);
-
-        // Filtre recherche texte uniquement
-        if ($request->filled('search')) {
-            $term = $request->search;
-            $query->where(function($q) use ($term) {
-                $q->where('modele_materiels.nom', 'ilike', "%{$term}%")
-                  ->orWhere('categories.nom', 'ilike', "%{$term}%")
-                  ->orWhereHas('exemplaires', function($sq) use ($term) {
-                      $sq->where('numero_serie', 'ilike', "%{$term}%");
-                  });
-            });
+    // Regrouper par catégorie
+    $categoriesData = [];
+    foreach ($results as $row) {
+        $categorieKey = $row->categorie_id;
+        if (!isset($categoriesData[$categorieKey])) {
+            $categoriesData[$categorieKey] = [
+                'id' => $row->categorie_id,
+                'nom' => $row->categorie_nom,
+                'modeleMateriels' => []
+            ];
         }
-
-        // Tri
-        $results = $query->orderBy('modele_materiels.categorie_id')
-                         ->orderBy('modele_materiels.nom')
-                         ->paginate(30)
-                         ->withQueryString();
-
-        return Inertia::render('materiel/listemateriel', [
-            'materiels'  => $results,
-            'categories' => \App\Models\Categorie::all(['id', 'nom']),
-            'stats'      => $this->getGlobalStats(),
-            'filters'    => $request->only(['search']),
-        ]);
+        if ($row->modele_id) {
+            $categoriesData[$categorieKey]['modeleMateriels'][] = [
+                'id' => $row->modele_id,
+                'nom' => $row->modele_nom,
+                'qte_materiel' => (int)$row->qte_materiel,
+                'qte_livree' => (int)$row->qte_livree,
+                'qte_pieces' => (int)$row->qte_pieces
+            ];
+        }
     }
+
+    $categoriesList = array_values($categoriesData);
+
+    // Pagination
+    $perPage = 5;
+    $currentPage = request()->get('page', 1);
+    $paginatedCategories = collect($categoriesList)->forPage($currentPage, $perPage)->values();
+
+    $paginated = new \Illuminate\Pagination\LengthAwarePaginator(
+        $paginatedCategories,
+        count($categoriesList),
+        $perPage,
+        $currentPage,
+        ['path' => request()->url(), 'query' => request()->query()]
+    );
+
+    $formattedData = [
+        'data' => $paginated->items(),
+        'current_page' => $paginated->currentPage(),
+        'last_page' => $paginated->lastPage(),
+        'total' => $paginated->total(),
+        'from' => $paginated->firstItem(),
+        'to' => $paginated->lastItem(),
+        'per_page' => $paginated->perPage(),
+    ];
+
+    return Inertia::render('materiel/listemateriel', [
+        'categories' => $formattedData,
+        'stats' => $this->getGlobalStats(),
+        'filters' => $request->only(['search']),
+        'categoriesList' => Categorie::all(['id', 'nom']), // AJOUTE CETTE LIGNE
+    ]);
+}
 
     /**
      * Optimisation : Toutes les stats en 1 seule requête
@@ -133,110 +162,154 @@ class MaterielController extends Controller
             'exists' => $exists
         ]);
     }
+/**
+ * Recherche des modèles existants pour la réception de stock
+ */
+public function searchModelesReception(Request $request)
+{
+    $search = trim($request->get('q', ''));
+    $categorieId = $request->get('categorie_id');
+
+    if (strlen($search) < 2) {
+        return response()->json([]);
+    }
+
+    $query = \App\Models\ModeleMateriel::query();
+
+    if (!empty($search)) {
+        $query->where(function($q) use ($search) {
+            $q->whereRaw('LOWER(nom) LIKE ?', ["%" . strtolower($search) . "%"]);
+        });
+    }
+
+    if ($categorieId) {
+        $query->where('categorie_id', $categorieId);
+    }
+
+    // Ajout du withCount pour compter les pièces associées à ce modèle
+    $modeles = $query->orderBy('nom', 'asc')
+                     ->limit(10)
+                     ->withCount(['pieces as pieces_count']) // Compte les pièces
+                     ->get(['id', 'nom', 'categorie_id']);
+
+    return response()->json($modeles);
+}
 
     /**
-     * Stockage groupé
-     */
-    public function store_group(Request $request)
-    {
-        $request->validate([
-            'fournisseur'      => 'required|string|max:255',
-            'numero_contrat'   => 'required|string|max:255',
-            'items'            => 'required|array',
-            'ancien_scan_path' => 'nullable|string',
-        ]);
+ * Stockage groupé - CHAQUE SAISIE CRÉE UNE NOUVELLE RÉCEPTION
+ */
+public function store_group(Request $request)
+{
+    $request->validate([
+        'fournisseur'      => 'required|string|max:255',
+        'numero_contrat'   => 'required|string|max:255',
+        'items'            => 'required|array',
+        'ancien_scan_path' => 'nullable|string',
+    ]);
 
-        try {
-            return DB::transaction(function () use ($request) {
+    try {
+        return DB::transaction(function () use ($request) {
 
-                // 1. Gestion du Contrat
-                $contrat = \App\Models\Contrat::firstOrCreate(
-                    ['numero_contrat' => $request->numero_contrat],
-                    [
-                        'fournisseur' => $request->fournisseur,
-                        'quantite_totale_prevue' => $request->quantite_totale_prevue ?? 0
-                    ]
-                );
+            // 1. Gestion du Contrat
+            $contrat = \App\Models\Contrat::firstOrCreate(
+                ['numero_contrat' => $request->numero_contrat],
+                [
+                    'fournisseur' => $request->fournisseur,
+                    'quantite_totale_prevue' => $request->quantite_totale_prevue ?? 0
+                ]
+            );
 
-                // 2. Gestion du Scan
-                $scanPath = $request->hasFile('scan_contrat')
-                    ? $request->file('scan_contrat')->store('contrats/' . date('Y'), 'public')
-                    : ($request->ancien_scan_path ?? $contrat->scan_contrat);
+            // 2. Gestion du Scan
+            $scanPath = $request->hasFile('scan_contrat')
+                ? $request->file('scan_contrat')->store('contrats/' . date('Y'), 'public')
+                : ($request->ancien_scan_path ?? $contrat->scan_contrat);
 
-                if ($request->hasFile('scan_contrat')) {
-                    $contrat->update(['scan_contrat' => $scanPath]);
-                }
+            if ($request->hasFile('scan_contrat')) {
+                $contrat->update(['scan_contrat' => $scanPath]);
+            }
 
-                $totalCree = 0;
-                $allPiecesPayload = [];
+            $totalCree = 0;
+            $allPiecesPayload = [];
+            $dateLivraison = $request->date_livraison ?? now();
 
-                // 3. Boucle sur les items
-                foreach ($request->items as $item) {
+            // 3. Boucle sur les items
+            foreach ($request->items as $item) {
 
+                // 🔥 Utiliser l'ID du modèle existant si disponible
+                if (isset($item['modele_id']) && !empty($item['modele_id'])) {
+                    $modele = \App\Models\ModeleMateriel::find($item['modele_id']);
+                    if (!$modele) {
+                        $modele = \App\Models\ModeleMateriel::firstOrCreate([
+                            'nom' => $item['designation'],
+                            'categorie_id' => $item['categorie_id']
+                        ]);
+                    }
+                } else {
                     $modele = \App\Models\ModeleMateriel::firstOrCreate(
                         [
-                            'nom'          => $item['designation'],
+                            'nom' => $item['designation'],
                             'categorie_id' => $item['categorie_id']
                         ]
                     );
+                }
 
-                    // Création de la réception
-                    $reception = \App\Models\Reception::create([
-                        'contrat_id'     => $contrat->id,
-                        'numero_contrat' => $request->numero_contrat,
-                        'fournisseur'    => $request->fournisseur,
-                        'date_livraison' => $request->date_livraison ?? now(),
-                        'categorie_id'   => $item['categorie_id'],
-                        'unite'          => (int)$item['unite'],
-                        'somme'          => (int)$item['unite'],
-                        'scan_contrat'   => $scanPath
+                // 🔥 CORRECTION: TOUJOURS créer une nouvelle réception (pas de fusion)
+                $reception = \App\Models\Reception::create([
+                    'contrat_id'     => $contrat->id,
+                    'numero_contrat' => $request->numero_contrat,
+                    'fournisseur'    => $request->fournisseur,
+                    'date_livraison' => $dateLivraison,
+                    'categorie_id'   => $item['categorie_id'],
+                    'unite'          => (int)$item['unite'],
+                    'somme'          => (int)$item['unite'],
+                    'scan_contrat'   => $scanPath
+                ]);
+
+                // 4. Création des exemplaires physiques
+                for ($i = 0; $i < (int)$item['unite']; $i++) {
+                    $materiel = \App\Models\Materiel::create([
+                        'modele_materiel_id' => $modele->id,
+                        'numero_serie'       => "SN-" . strtoupper(Str::random(5)),
+                        'categorie_id'       => $item['categorie_id'],
+                        'reception_id'       => $reception->id,
+                        'etat'               => 'Disponible',
+                        'statut'             => 'Neuf',
                     ]);
 
-                    // 4. Création des exemplaires physiques
-                    for ($i = 0; $i < (int)$item['unite']; $i++) {
-                        $materiel = \App\Models\Materiel::create([
-                            'modele_materiel_id' => $modele->id,
-                            'numero_serie'       => "SN-" . strtoupper(Str::random(5)),
-                            'categorie_id'       => $item['categorie_id'],
-                            'reception_id'       => $reception->id,
-                            'etat'               => 'Disponible',
-                            'statut'             => 'Neuf',
-                        ]);
+                    $totalCree++;
 
-                        $totalCree++;
-
-                        // Préparation des pièces liées
-                        if (!empty($item['pieces_modeles'])) {
-                            foreach ($item['pieces_modeles'] as $mod) {
-                                $allPiecesPayload[] = [
-                                    'materiel_id'        => $materiel->id,
-                                    'modele_materiel_id' => $modele->id,
-                                    'nom_piece'          => $mod['nom'] ?? "Composant",
-                                    'numero_serie'       => "P-SN-" . strtoupper(Str::random(4)),
-                                    'statut'             => 'En Stock',
-                                    'created_at'         => now(),
-                                    'updated_at'         => now()
-                                ];
-                            }
+                    // Préparation des pièces liées
+                    if (!empty($item['pieces_modeles'])) {
+                        foreach ($item['pieces_modeles'] as $mod) {
+                            $allPiecesPayload[] = [
+                                'materiel_id'        => $materiel->id,
+                                'modele_materiel_id' => $modele->id,
+                                'nom_piece'          => $mod['nom'] ?? "Composant",
+                                'numero_serie'       => "P-SN-" . strtoupper(Str::random(4)),
+                                'statut'             => 'En Stock',
+                                'created_at'         => now(),
+                                'updated_at'         => now()
+                            ];
                         }
                     }
                 }
+            }
 
-                // 5. Insertion massive des pièces
-                if (!empty($allPiecesPayload)) {
-                    foreach (array_chunk($allPiecesPayload, 500) as $chunk) {
-                        DB::table('pieces_materiels')->insert($chunk);
-                    }
+            // 5. Insertion massive des pièces
+            if (!empty($allPiecesPayload)) {
+                foreach (array_chunk($allPiecesPayload, 500) as $chunk) {
+                    DB::table('pieces_materiels')->insert($chunk);
                 }
+            }
 
-                return redirect()->route('materiel.indexmat')
-                                 ->with('success', "Succès : $totalCree matériels ajoutés.");
-            });
-        } catch (\Exception $e) {
-            Log::error('Erreur store_group: ' . $e->getMessage());
-            return back()->with('error', "Erreur : " . $e->getMessage());
-        }
+            return redirect()->route('materiel.indexmat')
+                             ->with('success', "Succès : $totalCree matériels ajoutés.");
+        });
+    } catch (\Exception $e) {
+        Log::error('Erreur store_group: ' . $e->getMessage());
+        return back()->with('error', "Erreur : " . $e->getMessage());
     }
+}
 
     /**
      * Formulaire d'édition
@@ -256,43 +329,53 @@ class MaterielController extends Controller
      * Mise à jour d'un modèle et de ses exemplaires
      */
     public function updateModele(Request $request, $modeleId)
-    {
-        Log::info('=== UPDATE MODELE ===');
-        Log::info('Modele ID: ' . $modeleId);
+{
+    Log::info('=== UPDATE MODELE ===');
+    Log::info('Modele ID: ' . $modeleId);
 
-        try {
-            $validated = $request->validate([
-                'nom' => 'required|string|max:255',
-                'categorie_id' => 'required|exists:categories,id',
-                'description' => 'nullable|string',
+    try {
+        $validated = $request->validate([
+            'nom' => 'required|string|max:255',
+            'categorie_id' => 'required|exists:categories,id',
+            'description' => 'nullable|string',
+        ]);
+
+        $modele = \App\Models\ModeleMateriel::findOrFail($modeleId);
+
+        DB::transaction(function () use ($modele, $validated) {
+            // 1. Mettre à jour le modèle
+            $modele->update([
+                'nom' => $validated['nom'],
+                'categorie_id' => $validated['categorie_id'],
             ]);
 
-            $modele = \App\Models\ModeleMateriel::findOrFail($modeleId);
-
-            DB::transaction(function () use ($modele, $validated) {
-                // 1. Mettre à jour le modèle
-                $modele->update([
-                    'nom' => $validated['nom'],
+            // 2. Mettre à jour TOUS les exemplaires (materiels)
+            \App\Models\Materiel::where('modele_materiel_id', $modele->id)
+                ->update([
                     'categorie_id' => $validated['categorie_id'],
+                    'description' => $validated['description'] ?? null,
                 ]);
 
-                // 2. Mettre à jour TOUS les exemplaires
-                \App\Models\Materiel::where('modele_materiel_id', $modele->id)
-                    ->update([
-                        'categorie_id' => $validated['categorie_id'],
-                        'description' => $validated['description'] ?? null,
-                    ]);
+            // 3. Mettre à jour les réceptions (via la relation)
+            // Récupérer les réceptions uniques
+            $receptions = \App\Models\Reception::whereHas('materiels', function($q) use ($modele) {
+                $q->where('modele_materiel_id', $modele->id);
+            })->get();
 
-                Log::info('Modèle et exemplaires mis à jour avec succès');
-            });
+            foreach ($receptions as $reception) {
+                $reception->update(['categorie_id' => $validated['categorie_id']]);
+            }
 
-            return back()->with('success', 'Modèle et stock mis à jour avec succès');
+            Log::info('Modèle, exemplaires et réceptions mis à jour');
+        });
 
-        } catch (\Exception $e) {
-            Log::error('Erreur update modèle: ' . $e->getMessage());
-            return back()->with('error', 'Erreur: ' . $e->getMessage());
-        }
+        return back()->with('success', 'Modèle, stock et réceptions mis à jour');
+
+    } catch (\Exception $e) {
+        Log::error('Erreur update modèle: ' . $e->getMessage());
+        return back()->with('error', 'Erreur: ' . $e->getMessage());
     }
+}
 
     /**
      * Suppression et archivage
@@ -445,65 +528,103 @@ class MaterielController extends Controller
 
         return $pdf->download("Historique_Sorties_{$nom}.pdf");
     }
+/**
+ * Export PDF du stock magasin - Version optimisée
+ */
+public function export(Request $request)
+{
+    $filters = $request->only(['search']);
 
-    /**
-     * Export PDF du stock magasin
-     */
-    public function export(Request $request)
-    {
-        $filters = $request->only(['search']);
+    // Requête SQL directe pour récupérer les catégories avec leurs modèles
+    $results = DB::select("
+        SELECT
+            c.id as categorie_id,
+            c.nom as categorie_nom,
+            m.id as modele_id,
+            m.nom as modele_nom,
+            COUNT(CASE WHEN mat.etat IN ('Disponible', 'En stock') THEN 1 END) as qte_materiel,
+            COUNT(CASE WHEN mat.etat = 'Livré' THEN 1 END) as qte_livree,
+            COUNT(p.id) as qte_pieces
+        FROM categories c
+        LEFT JOIN modele_materiels m ON m.categorie_id = c.id
+        LEFT JOIN materiels mat ON mat.modele_materiel_id = m.id
+        LEFT JOIN pieces_materiels p ON p.materiel_id = mat.id AND p.demande_id IS NULL
+        GROUP BY c.id, c.nom, m.id, m.nom
+        HAVING COUNT(m.id) > 0
+        ORDER BY c.nom, m.nom
+    ");
 
-        $query = Materiel::with([
-            'categorie',
-            'modele',
-            'pieces' => function($q) {
-                $q->whereNull('demande_id');
-            }
-        ])
-        ->whereIn('etat', ['Disponible', 'En stock'])
-        ->whereNull('demande_id');
-
-        if (!empty($filters['search'])) {
-            $search = $filters['search'];
-            $query->where(function ($q) use ($search) {
-                $q->whereHas('modele', function($modeleQuery) use ($search) {
-                    $modeleQuery->where('nom', 'ilike', "%{$search}%");
-                })
-                ->orWhere('numero_serie', 'ilike', "%{$search}%")
-                ->orWhereHas('categorie', function($cat) use ($search) {
-                    $cat->where('nom', 'ilike', "%{$search}%");
-                });
-            });
+    // Regrouper par catégorie
+    $categoriesData = [];
+    foreach ($results as $row) {
+        $categorieKey = $row->categorie_id;
+        if (!isset($categoriesData[$categorieKey])) {
+            $categoriesData[$categorieKey] = [
+                'id' => $row->categorie_id,
+                'nom' => $row->categorie_nom,
+                'modeleMateriels' => []
+            ];
         }
-
-        $materiels = $query->get();
-
-        if ($materiels->isEmpty()) {
-            return back()->with('error', 'Aucun matériel trouvé en stock.');
+        if ($row->modele_id) {
+            $categoriesData[$categorieKey]['modeleMateriels'][] = [
+                'id' => $row->modele_id,
+                'nom' => $row->modele_nom,
+                'qte_materiel' => (int)$row->qte_materiel,
+                'qte_livree' => (int)$row->qte_livree,
+                'qte_pieces' => (int)$row->qte_pieces
+            ];
         }
-
-        $materielsGroupes = $materiels->groupBy(function($item) {
-            return $item->categorie->nom ?? 'SANS CATÉGORIE';
-        });
-
-        $materielsGroupes = $materielsGroupes->map(function($group) {
-            return $group->groupBy(function($item) {
-                return $item->modele->nom ?? 'MODÈLE INCONNU';
-            });
-        });
-
-        $data = [
-            'materielsGroupes' => $materielsGroupes,
-            'periode' => "STOCK RÉEL MAGASIN",
-            'date' => now()->format('d/m/Y'),
-            'total' => $materiels->count()
-        ];
-
-        $pdf = Pdf::loadView('pdf.inventaire_global', $data)
-            ->setPaper('a4', 'portrait');
-
-        return $pdf->download("Inventaire_Magasin_" . now()->format('Ymd') . ".pdf");
     }
+
+    $categoriesList = array_values($categoriesData);
+
+    // Appliquer le filtre de recherche si présent
+    if (!empty($filters['search'])) {
+        $search = strtolower($filters['search']);
+        foreach ($categoriesList as &$categorie) {
+            $categorie['modeleMateriels'] = array_filter($categorie['modeleMateriels'], function($modele) use ($search) {
+                return str_contains(strtolower($modele['nom']), $search);
+            });
+        }
+        $categoriesList = array_filter($categoriesList, function($categorie) {
+            return !empty($categorie['modeleMateriels']);
+        });
+        $categoriesList = array_values($categoriesList);
+    }
+
+    // Calcul des totaux pour les stats
+    $totalMateriels = 0;
+    $totalDisponible = 0;
+    $totalLivres = 0;
+    $totalPieces = 0;
+
+    foreach ($categoriesList as $categorie) {
+        foreach ($categorie['modeleMateriels'] as $modele) {
+            $totalMateriels += $modele['qte_materiel'] + $modele['qte_livree'];
+            $totalDisponible += $modele['qte_materiel'];
+            $totalLivres += $modele['qte_livree'];
+            $totalPieces += $modele['qte_pieces'];
+        }
+    }
+
+    $data = [
+        'categories' => $categoriesList,
+        'stats' => [
+            'total' => $totalMateriels,
+            'disponible' => $totalDisponible,
+            'livres' => $totalLivres,
+            'pieces_sorties' => $totalPieces,
+            'en_attente' => 0
+        ],
+        'date' => now()->format('d/m/Y H:i'),
+        'filters' => $filters
+    ];
+
+    $pdf = Pdf::loadView('pdf.inventaire_global', $data)
+        ->setPaper('a4', 'portrait');
+
+    return $pdf->download("Inventaire_Magasin_" . now()->format('Ymd') . ".pdf");
+}
 
     /**
      * Helper pour le nom des mois

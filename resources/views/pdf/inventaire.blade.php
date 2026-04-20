@@ -87,96 +87,67 @@
 
         /* ===== LIGNES DE GROUPEMENT ===== */
         .group-header-supplier {
-            background-color: #d3d3d3 !important;
+            background-color: #1a6d5e !important;
+            color: white !important;
             font-weight: bold;
             font-size: 10px;
-            padding: 8px 5px !important;
+            padding: 10px 8px !important;
             border: 2px solid #000 !important;
         }
 
-        .group-header-category {
-            background-color: #f0f0f0 !important;
-            font-weight: bold;
-            font-style: italic;
+        .group-header-supplier span {
+            background-color: white;
+            color: #1a6d5e;
+            padding: 2px 8px;
+            border-radius: 3px;
+            margin-left: 15px;
             font-size: 9px;
-            padding: 6px 5px 6px 20px !important;
-            border-left: 1px solid #000 !important;
-            border-right: 1px solid #000 !important;
         }
 
-        /* ===== GROUPEMENT PAR MATÉRIEL ===== */
-        .materiel-group {
-            background-color: #fafafa !important;
+        /* ===== STATISTIQUES PAR FOURNISSEUR ===== */
+        .stats-row {
+            background-color: #f0fdfa !important;
             font-weight: bold;
             font-size: 9px;
-            padding: 5px 5px 5px 30px !important;
-            border-left: 1px solid #000 !important;
-            border-right: 1px solid #000 !important;
         }
 
-        /* ===== AFFICHAGE DES NUMÉROS DE SÉRIE ===== */
-        .serie-list {
-            margin-top: 2px;
-            padding-left: 15px;
+        .stats-row td {
+            padding: 6px 8px !important;
+            background-color: #f0fdfa !important;
         }
 
-        .serie-item {
-            display: block;
-            font-family: monospace;
-            font-size: 8px;
-            color: #333;
-            margin-bottom: 1px;
-        }
-
-        /* ===== AFFICHAGE DES PIÈCES ===== */
-        .pieces-container {
-            margin-top: 3px;
-            padding-left: 5px;
-        }
-
-        .piece-item {
-            display: block;
-            font-size: 7.5px;
-            color: #555;
-            margin-bottom: 1px;
-        }
-
-        .piece-badge {
+        /* ===== BADGES ===== */
+        .badge-stock {
             display: inline-block;
-            background-color: #f0f0f0;
-            border: 1px solid #aaa;
-            padding: 1px 4px;
-            margin-left: 3px;
-            font-size: 6px;
-        }
-
-        /* ===== BADGES D'ÉTAT ===== */
-        .badge {
-            display: inline-block;
-            padding: 2px 6px;
-            border-radius: 10px;
-            font-size: 7px;
-            font-weight: bold;
-            text-align: center;
-        }
-
-        .badge-success {
             background-color: #d4edda;
             border: 1px solid #28a745;
             color: #155724;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 8px;
+            font-weight: bold;
         }
 
-        .badge-warning {
+        .badge-sorti {
+            display: inline-block;
             background-color: #fff3cd;
             border: 1px solid #ffc107;
             color: #856404;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 8px;
+            font-weight: bold;
         }
 
-        .badge-stock {
+        .badge-total {
+            display: inline-block;
             background-color: #e0e0e0;
             border: 1px solid #666;
             color: #333;
-            font-weight: normal;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 8px;
+            font-weight: bold;
         }
 
         /* ===== PIED DE PAGE ===== */
@@ -207,7 +178,7 @@
         .signature-box {
             width: 45%;
             border: 1px solid #000;
-            height: 70px;
+            height: 80px;
             padding: 8px;
             vertical-align: top;
         }
@@ -226,6 +197,20 @@
             margin-top: 15px;
             font-size: 7px;
             color: #555;
+        }
+
+        /* ===== RÉCAPITULATIF GÉNÉRAL ===== */
+        .total-general {
+            margin-top: 20px;
+            padding: 10px;
+            border: 1px solid #000;
+            text-align: center;
+            background-color: #f9f9f9;
+        }
+
+        .total-general p {
+            margin: 5px 0;
+            font-size: 9px;
         }
 
         /* ===== UTILITAIRES ===== */
@@ -259,156 +244,87 @@
             {{ $inventaire->date_cloture ? \Carbon\Carbon::parse($inventaire->date_cloture)->format('d/m/Y') : 'N/A' }}
         </div>
         <div class="info-item">
-            <span class="info-label">Total articles :</span>
-            {{ $total_lignes ?? count($details) }}
+            <span class="info-label">Total matériels :</span>
+            {{ $total_materiels ?? 0 }}
+        </div>
+        <div class="info-item">
+            <span class="info-label">Total modèles :</span>
+            {{ $total_modeles ?? 0 }}
         </div>
     </div>
 
-    <!-- ===== TABLEAU DES MATÉRIELS ===== -->
+    <!-- ===== TABLEAU DES MODÈLES GROUPÉS PAR FOURNISSEUR ===== -->
     <table class="data-table">
         <thead>
             <tr>
-                <th width="35%">DÉSIGNATION & SÉRIES</th>
-                <th width="15%">CATÉGORIE</th>
-                <th width="10%">ÉTAT</th>
-                <th width="20%">FOURNISSEUR</th>
-                <th width="20%">LOCALISATION</th>
+                <th width="50%">MODÈLE</th>
+                <th width="20%" class="text-center">EN STOCK (MAGASIN)</th>
+                <th width="20%" class="text-center">SORTIS</th>
+                <th width="10%" class="text-center">TOTAL</th>
             </tr>
         </thead>
         <tbody>
-            @php
-                $groupedBySupplier = collect($details)->groupBy('fournisseur');
-            @endphp
-
-            @forelse($groupedBySupplier as $fournisseur => $items)
+            @forelse($groupes as $groupe)
                 <!-- LIGNE DE GROUPEMENT : FOURNISSEUR -->
                 <tr>
-                    <td colspan="5" class="group-header-supplier">
-                        <span style="margin-right: 30px;">FOURNISSEUR : {{ $fournisseur ?: 'NON RENSEIGNÉ' }}</span>
-                        @php
-                            $firstItem = $items->first();
-                        @endphp
-                        @if(!empty($firstItem['numero_contrat']) && $firstItem['numero_contrat'] !== 'N/A')
-                            <span>CONTRAT : {{ $firstItem['numero_contrat'] }}</span>
-                        @endif
+                    <td colspan="4" class="group-header-supplier">
+                        FOURNISSEUR : {{ $groupe['fournisseur'] ?: 'NON RENSEIGNÉ' }}
+                        <span>CONTRAT : {{ $groupe['numero_contrat'] ?: 'N/A' }}</span>
                     </td>
                 </tr>
 
-                @foreach($items->groupBy('categorie') as $categorie => $categoryItems)
-                    <!-- LIGNE DE GROUPEMENT : CATÉGORIE -->
-                    <tr>
-                        <td colspan="5" class="group-header-category">
-                            CATÉGORIE : {{ $categorie ?: 'NON DÉFINIE' }} ({{ $categoryItems->count() }} article(s))
-                        </td>
-                    </tr>
+                <!-- LIGNE DE STATISTIQUES DU FOURNISSEUR -->
+                <tr>
+                    <td class="stats-row text-right font-bold">TOTAL {{ $groupe['fournisseur'] }} :</td>
+                    <td class="stats-row text-center font-bold">
+                        {{ collect($groupe['modeles'])->sum('qte_stock') }}
+                    </td>
+                    <td class="stats-row text-center font-bold">
+                        {{ collect($groupe['modeles'])->sum('qte_sorti') }}
+                    </td>
+                    <td class="stats-row text-center font-bold">
+                        {{ collect($groupe['modeles'])->sum('total') }}
+                    </td>
+                </tr>
 
-                    @php
-                        // Regrouper les matériels par nom/désignation
-                        $groupedByDesignation = $categoryItems->groupBy('designation');
-                    @endphp
-
-                    @foreach($groupedByDesignation as $designation => $designationItems)
-                        <!-- LIGNE DE GROUPEMENT : NOM DU MATÉRIEL -->
-                        <tr>
-                            <td colspan="5" class="materiel-group">
-                                {{ strtoupper($designation) }} ({{ $designationItems->count() }} exemplaire(s))
-                            </td>
-                        </tr>
-
-                        @foreach($designationItems as $item)
-                        <tr>
-                            <!-- COLONNE 1 : Désignation et Liste des séries -->
-                            <td>
-                                <!-- Liste des numéros de série -->
-                                <div class="serie-list">
-                                    <span class="serie-item">• {{ $item['numero_serie'] }}</span>
-                                </div>
-
-                                <!-- Affichage des pièces si existantes -->
-                                @if(!empty($item['pieces']) && count($item['pieces']) > 0)
-                                    <div class="pieces-container">
-                                        <span style="font-size: 7px; font-weight: bold;">Pièces incluses:</span>
-                                        @foreach($item['pieces'] as $piece)
-                                            <span class="piece-item">
-                                                - {{ $piece['nom'] }}
-                                                @if(!empty($piece['demande']['service']))
-                                                    <span class="piece-badge">(Sortie: {{ $piece['demande']['service'] }})</span>
-                                                @endif
-                                            </span>
-                                        @endforeach
-                                    </div>
-                                @endif
-                            </td>
-
-                            <!-- COLONNE 2 : Catégorie -->
-                            <td class="text-center">
-                                {{ $item['categorie'] }}
-                            </td>
-
-                            <!-- COLONNE 3 : État -->
-                            <td class="text-center">
-                                @php
-                                    $etat = $item['etat_materiel'] ?? 'N/A';
-                                    $badgeClass = in_array($etat, ['Bon', 'Disponible', 'Neuf']) ? 'badge-success' : 'badge-warning';
-                                @endphp
-                                <span class="badge {{ $badgeClass }}">
-                                    {{ $etat }}
-                                </span>
-                            </td>
-
-                            <!-- COLONNE 4 : Fournisseur -->
-                            <td>
-                                {{ $item['fournisseur'] }}
-                            </td>
-
-                            <!-- COLONNE 5 : Localisation / Bénéficiaire -->
-                            <td>
-                                @if(!empty($item['demande']))
-                                    <span class="font-bold">{{ $item['demande']['demandeur'] }}</span><br>
-                                    <span style="font-size: 7px;">{{ $item['demande']['service'] }}</span>
-                                @else
-                                    <span class="badge badge-stock">EN STOCK</span>
-                                @endif
-                            </td>
-                        </tr>
-                        @endforeach
-                    @endforeach
+                <!-- LISTE DES MODÈLES DU FOURNISSEUR -->
+                @foreach($groupe['modeles'] as $modele)
+                <tr>
+                    <td class="font-bold">{{ $modele['designation'] }}</td>
+                    <td class="text-center">
+                        <span class="badge-stock">{{ $modele['qte_stock'] }}</span>
+                    </td>
+                    <td class="text-center">
+                        <span class="badge-sorti">{{ $modele['qte_sorti'] }}</span>
+                    </td>
+                    <td class="text-center">
+                        <span class="badge-total">{{ $modele['total'] }}</span>
+                    </td>
+                </tr>
                 @endforeach
+
+                <!-- ESPACE ENTRE FOURNISSEURS -->
+                <tr><td colspan="4" style="height: 10px; background-color: transparent; border: none;"></td></tr>
             @empty
                 <tr>
-                    <td colspan="5" class="text-center" style="padding: 30px;">
-                        <span style="font-size: 11px;">AUCUN ARTICLE DANS CET INVENTAIRE</span>
+                    <td colspan="4" class="text-center" style="padding: 30px;">
+                        <span style="font-size: 11px;">AUCUN MODÈLE DANS CET INVENTAIRE</span>
                     </td>
                 </tr>
             @endforelse
         </tbody>
     </table>
 
-    <!-- ===== RÉCAPITULATIF PAR FOURNISSEUR ===== -->
-    <div style="margin-top: 15px; margin-bottom: 20px;">
-        <table style="width: 100%; border-collapse: collapse; font-size: 8px;">
-            <tr style="background-color: #e0e0e0;">
-                <th style="border: 1px solid #000; padding: 5px;">FOURNISSEUR</th>
-                <th style="border: 1px solid #000; padding: 5px;">NB ARTICLES</th>
-                <th style="border: 1px solid #000; padding: 5px;">CATÉGORIES</th>
-            </tr>
-            @php
-                $recapBySupplier = collect($details)->groupBy('fournisseur')->map(function($items, $fournisseur) {
-                    return [
-                        'fournisseur' => $fournisseur,
-                        'count' => $items->count(),
-                        'categories' => $items->pluck('categorie')->unique()->implode(', '),
-                    ];
-                });
-            @endphp
-            @foreach($recapBySupplier as $recap)
-                <tr>
-                    <td style="border: 1px solid #000; padding: 4px;">{{ $recap['fournisseur'] }}</td>
-                    <td style="border: 1px solid #000; padding: 4px; text-align: center;">{{ $recap['count'] }}</td>
-                    <td style="border: 1px solid #000; padding: 4px;">{{ $recap['categories'] }}</td>
-                </tr>
-            @endforeach
-        </table>
+    <!-- ===== RÉCAPITULATIF GÉNÉRAL ===== -->
+    <div class="total-general">
+        <p><strong>RÉCAPITULATIF GÉNÉRAL DE L'INVENTAIRE</strong></p>
+        <p>
+            Total fournisseurs : <strong>{{ count($groupes) }}</strong> |
+            Total modèles : <strong>{{ $total_modeles ?? 0 }}</strong> |
+            Total matériels en stock : <strong>{{ $total_stock ?? 0 }}</strong> |
+            Total matériels sortis : <strong>{{ $total_sorti ?? 0 }}</strong> |
+            Total général : <strong>{{ $total_materiels ?? 0 }}</strong>
+        </p>
     </div>
 
     <!-- ===== SIGNATURES ===== -->
@@ -441,8 +357,8 @@
 
     <!-- ===== PIED DE PAGE ===== -->
     <div class="footer-section">
-        <span>Inventaire TTI {{ $inventaire->annee }} - Document officiel - {{ count($details) }} articles archivés</span>
-        <span style="margin-left: 20px;">Généré le {{ date('d/m/Y H:i:s') }}</span>
+        <span>Inventaire TTI {{ $inventaire->annee }} - Document officiel</span>
+        <span style="margin-left: 20px;">Généré le {{ \Carbon\Carbon::parse($date)->format('d/m/Y H:i:s') }}</span>
     </div>
 
 </body>

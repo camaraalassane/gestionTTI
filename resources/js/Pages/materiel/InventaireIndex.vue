@@ -2,6 +2,7 @@
     import AuthenticatedLayout from "@/Layouts/AuthenticatedLayout.vue";
     import { Head, useForm, router } from "@inertiajs/vue3";
     import { ref } from "vue";
+    import axios from 'axios';
 
     const props = defineProps({
         historique: {
@@ -65,6 +66,8 @@
                 };
                 form.reset();
                 form.annee = new Date().getFullYear().toString();
+                // Recharger la page pour voir le nouvel inventaire
+                setTimeout(() => router.reload(), 1500);
             },
             onError: (errors) => {
                 console.error('Erreur lors de la clôture:', errors);
@@ -89,12 +92,39 @@
             color: 'info'
         };
         window.open(route("inventaire.pdf", id), "_blank");
+        setTimeout(() => {
+            snackbar.value.show = false;
+        }, 2000);
+    };
+
+    // Vider le cache
+
+    const clearCache = async () => {
+        try {
+            const response = await axios.post(route('inventaire.clear-cache'));
+            if (response.data.success) {
+                snackbar.value = {
+                    show: true,
+                    text: '✅ Cache vidé avec succès !',
+                    color: 'success'
+                };
+                setTimeout(() => router.reload(), 1000);
+            }
+        } catch (error) {
+            snackbar.value = {
+                show: true,
+                text: '❌ Erreur lors du vidage du cache',
+                color: 'error'
+            };
+        }
     };
 
     // Formater la date
     const formatDate = (dateString) => {
         if (!dateString) return 'Date inconnue';
-        return new Date(dateString).toLocaleDateString("fr-FR", {
+        const date = new Date(dateString);
+        if (isNaN(date.getTime())) return 'Date invalide';
+        return date.toLocaleDateString("fr-FR", {
             day: "2-digit",
             month: "short",
             year: "numeric",
@@ -153,8 +183,7 @@
                         </p>
 
                         <v-form @submit.prevent="submitCloture">
-                            <v-select v-model="form.annee" :items="[2023, 2024, 2025, 2026]" label="Année d'exercice" variant="filled" bg-color="teal-lighten-5" color="teal-darken-2" density="comfortable" rounded="lg" prepend-inner-icon="mdi-calendar-badge" :error-messages="form.errors.annee" class="mb-4" persistent-placeholder>
-                                <!-- Ajouter un indicateur pour les années déjà archivées -->
+                            <v-select v-model="form.annee" :items="[2023, 2024, 2025, 2026, 2027, 2028]" label="Année d'exercice" variant="filled" bg-color="teal-lighten-5" color="teal-darken-2" density="comfortable" rounded="lg" prepend-inner-icon="mdi-calendar-badge" :error-messages="form.errors.annee" class="mb-4" persistent-placeholder>
                                 <template #item="{ item, props: itemProps }">
                                     <v-list-item v-bind="itemProps">
                                         <template #append>
@@ -166,7 +195,7 @@
                                 </template>
                             </v-select>
 
-                            <v-btn type="submit" block color="teal-darken-3" size="x-large" variant="elevated" class="rounded-lg font-weight-black text-uppercase" :loading="form.processing" :disabled="form.processing" prepend-icon="mdi-check-all" elevation="2">
+                            <v-btn type="submit" block color="teal-darken-3" size="large" variant="elevated" class="rounded-lg font-weight-black text-uppercase" :loading="form.processing" :disabled="form.processing" prepend-icon="mdi-check-all" elevation="2">
                                 GÉNÉRER LA CLÔTURE
                             </v-btn>
                         </v-form>
@@ -186,6 +215,12 @@
                                 Historique des inventaires clos
                             </v-toolbar-title>
                             <v-spacer></v-spacer>
+
+                            <!-- BOUTON VIDER LE CACHE -->
+                            <v-btn color="grey-darken-1" variant="text" size="small" @click="clearCache" prepend-icon="mdi-cache-refresh" class="mr-2" title="Vider le cache">
+                                Vider le cache
+                            </v-btn>
+
                             <v-chip size="small" color="teal-lighten-4" text-color="teal-darken-4" variant="flat" class="mr-4 font-weight-bold">
                                 {{ historique.length }} ARCHIVE{{ historique.length > 1 ? 'S' : '' }}
                             </v-chip>
@@ -195,15 +230,9 @@
                             <v-table hover fixed-header density="comfortable" class="custom-table">
                                 <thead>
                                     <tr>
-                                        <th class="text-left text-teal-darken-4">
-                                            ANNÉE
-                                        </th>
-                                        <th class="text-left">
-                                            DATE D'ARCHIVAGE
-                                        </th>
-                                        <th class="text-center">
-                                            QUANTITÉ CLÔTURÉE
-                                        </th>
+                                        <th class="text-left text-teal-darken-4">ANNÉE</th>
+                                        <th class="text-left">DATE D'ARCHIVAGE</th>
+                                        <th class="text-center">QUANTITÉ CLÔTURÉE</th>
                                         <th class="text-right">ACTIONS</th>
                                     </tr>
                                 </thead>
@@ -275,7 +304,7 @@
     }
 
     .shadow-sm {
-        box-shadow: 0 2px 10px rgba(0, 121, 107, 0.08) !important;
+        box-shadow: 0 2px 10px rgba(1, 84, 75, 0.08) !important;
     }
 
     .leading-tight {

@@ -32,7 +32,6 @@
     // Configuration du tableau groupé
     const headers = [
         { title: "DÉSIGNATION & DÉTAILS", key: "nom_materiel", sortable: false },
-        // On enlève les autres colonnes car elles sont maintenant dans la carte
     ];
 
     const groupBy = [{ key: 'numcomande' }];
@@ -63,11 +62,9 @@
     };
 
     // FORMATTAGE & STYLE
-    // FORMATTAGE & STYLE
     const formatDate = (dateString) => {
         if (!dateString) return "N/A";
 
-        // Si c'est déjà une chaîne formatée (comme "15/03/2024"), la retourner
         if (typeof dateString === 'string' && dateString.match(/^\d{2}\/\d{2}\/\d{4}$/)) {
             return dateString;
         }
@@ -75,7 +72,6 @@
         try {
             const date = new Date(dateString);
             if (isNaN(date.getTime())) {
-                // Essayer de parser le format MySQL (YYYY-MM-DD)
                 if (typeof dateString === 'string' && dateString.match(/^\d{4}-\d{2}-\d{2}/)) {
                     const [year, month, day] = dateString.split(' ')[0].split('-');
                     return `${day}/${month}/${year}`;
@@ -159,104 +155,107 @@
             </v-row>
 
             <v-card class="rounded-xl shadow-lg" border flat>
-                <v-data-table :headers="headers" :items="demandes.data" :group-by="groupBy" class="demandes-table-compact" hide-default-footer>
-                    <template v-slot:group-header="{ item, columns, toggleGroup, isGroupOpen }">
-                        <tr class="bg-grey-lighten-4" style="height: 32px !important;">
-                            <td :colspan="columns.length" class="py-0 px-2">
-                                <div class="d-flex align-center">
-                                    <v-btn :icon="isGroupOpen(item) ? 'mdi-chevron-down' : 'mdi-chevron-right'" variant="text" size="x-small" @click="toggleGroup(item)"></v-btn>
-
-                                    <v-chip color="teal-darken-4" size="x-small" class="mr-2 font-weight-black" style="height: 18px; font-size: 0.65rem !important;">
-                                        #{{ item.value }}
-                                    </v-chip>
-
-                                    <span class="text-caption font-weight-bold mr-3" style="font-size: 0.7rem !important;">
-                                        {{ item.items[0]?.raw?.date_affichee || item.items[0]?.date_affichee }}
-                                    </span>
-
-                                    <span class="text-caption" style="font-size: 0.7rem !important;">
-                                        {{ item.items[0]?.raw?.demandeur_nom || item.items[0]?.demandeur_nom }}
-                                        <span class="mx-1 text-grey">|</span>
-                                        <b class="text-grey-darken-3">{{ item.items[0]?.raw?.service_beneficiaire || item.items[0]?.service_beneficiaire }}</b>
-                                    </span>
-
-                                    <v-spacer></v-spacer>
-
-                                    <v-chip :color="getStatusConfig(item.items[0]?.raw?.statut || item.items[0]?.statut).color" size="x-small" variant="flat" class="mr-2 font-weight-bold" style="height: 18px; font-size: 0.6rem !important;" :prepend-icon="getStatusConfig(item.items[0]?.raw?.statut || item.items[0]?.statut).icon">
-                                        {{ item.items[0]?.raw?.statut || item.items[0]?.statut }}
-                                    </v-chip>
-
-                                    <v-btn icon="mdi-delete-sweep" color="red" variant="text" size="x-small" @click="openDeleteModal(item.items[0]?.raw || item.items[0])"></v-btn>
-                                </div>
-                            </td>
-                        </tr>
-                    </template>
-
-                    <template v-slot:item="{ item }">
-                        <tr v-if="item && (item.raw || item)" style="height: auto !important;">
-                            <td :colspan="headers.length" class="pa-0 border-0">
-                                <v-card variant="outlined" border class="rounded-lg my-1 bg-white ml-8 mr-2 px-2 py-1" style="border-color: #e0e0e0 !important;">
+                <!-- Tableau sans conteneur supplémentaire, on utilise directement le scroll natif du navigateur -->
+                <div style="max-height: 500px; overflow-y: auto; display: block;">
+                    <v-data-table :headers="headers" :items="demandes.data" :group-by="groupBy" class="demandes-table-compact" hide-default-footer density="compact" style="height: auto;">
+                        <template v-slot:group-header="{ item, columns, toggleGroup, isGroupOpen }">
+                            <tr class="bg-grey-lighten-4" style="height: 32px !important;">
+                                <td :colspan="columns.length" class="py-0 px-2">
                                     <div class="d-flex align-center">
-                                        <div class="flex-grow-1">
-                                            <template v-if="!(item.raw || item).est_sortie_materiel && (item.raw || item).pieces?.length > 0">
-                                                <div v-for="piece in (item.raw || item).pieces" :key="'only-piece-' + piece.id">
+                                        <v-btn :icon="isGroupOpen(item) ? 'mdi-chevron-down' : 'mdi-chevron-right'" variant="text" size="x-small" @click="toggleGroup(item)"></v-btn>
+
+                                        <v-chip color="teal-darken-4" size="x-small" class="mr-2 font-weight-black" style="height: 18px; font-size: 0.65rem !important;">
+                                            #{{ item.value }}
+                                        </v-chip>
+
+                                        <span class="text-caption font-weight-bold mr-3" style="font-size: 0.7rem !important;">
+                                            {{ item.items[0]?.raw?.date_affichee || item.items[0]?.date_affichee }}
+                                        </span>
+
+                                        <span class="text-caption" style="font-size: 0.7rem !important;">
+                                            {{ item.items[0]?.raw?.demandeur_nom || item.items[0]?.demandeur_nom }}
+                                            <span class="mx-1 text-grey">|</span>
+                                            <b class="text-grey-darken-3">{{ item.items[0]?.raw?.service_beneficiaire || item.items[0]?.service_beneficiaire }}</b>
+                                        </span>
+
+                                        <v-spacer></v-spacer>
+
+                                        <v-chip :color="getStatusConfig(item.items[0]?.raw?.statut || item.items[0]?.statut).color" size="x-small" variant="flat" class="mr-2 font-weight-bold" style="height: 18px; font-size: 0.6rem !important;" :prepend-icon="getStatusConfig(item.items[0]?.raw?.statut || item.items[0]?.statut).icon">
+                                            {{ item.items[0]?.raw?.statut || item.items[0]?.statut }}
+                                        </v-chip>
+
+                                        <v-btn icon="mdi-delete-sweep" color="red" variant="text" size="x-small" @click="openDeleteModal(item.items[0]?.raw || item.items[0])"></v-btn>
+                                    </div>
+                                </td>
+                            </tr>
+                        </template>
+
+                        <template v-slot:item="{ item }">
+                            <tr v-if="item && (item.raw || item)" style="height: auto !important;">
+                                <td :colspan="headers.length" class="pa-0 border-0">
+                                    <v-card variant="outlined" border class="rounded-lg my-1 bg-white ml-8 mr-2 px-2 py-1" style="border-color: #e0e0e0 !important;">
+                                        <div class="d-flex align-center">
+                                            <div class="flex-grow-1">
+                                                <template v-if="!(item.raw || item).est_sortie_materiel && (item.raw || item).pieces?.length > 0">
+                                                    <div v-for="piece in (item.raw || item).pieces" :key="'only-piece-' + piece.id">
+                                                        <div class="d-flex align-center">
+                                                            <v-avatar size="20" color="orange-lighten-4" class="mr-2">
+                                                                <v-icon color="orange-darken-3" size="14">mdi-puzzle</v-icon>
+                                                            </v-avatar>
+                                                            <span class="font-weight-black text-uppercase text-orange-darken-4" style="font-size: 0.85rem !important;">
+                                                                {{ piece.nom_piece }}
+                                                            </span>
+                                                            <v-chip size="x-small" variant="outlined" color="orange-darken-2" class="ml-2 px-1" style="height: 16px; font-size: 0.6rem !important;">
+                                                                PIÈCE DÉTACHÉE
+                                                            </v-chip>
+                                                        </div>
+
+                                                        <div class="text-grey ml-7 mt-1" style="font-size: 0.65rem !important;">
+                                                            Origine : {{ (item.raw || item).nom_materiel }} (S/N Mat : {{ (item.raw || item).numero_serie || 'N/A' }})
+                                                        </div>
+                                                    </div>
+                                                </template>
+
+                                                <template v-else>
                                                     <div class="d-flex align-center">
-                                                        <v-avatar size="20" color="orange-lighten-4" class="mr-2">
-                                                            <v-icon color="orange-darken-3" size="14">mdi-puzzle</v-icon>
-                                                        </v-avatar>
-                                                        <span class="font-weight-black text-uppercase text-orange-darken-4" style="font-size: 0.85rem !important;">
-                                                            {{ piece.nom_piece }}
+                                                        <v-icon color="teal-darken-2" size="small" class="mr-1">mdi-monitor</v-icon>
+                                                        <span class="font-weight-black text-uppercase" style="font-size: 0.8rem !important;">
+                                                            {{ (item.raw || item).nom_materiel }}
                                                         </span>
-                                                        <v-chip size="x-small" variant="outlined" color="orange-darken-2" class="ml-2 px-1" style="height: 16px; font-size: 0.6rem !important;">
-                                                            PIÈCE DÉTACHÉE
+                                                        <span class="ml-2 text-grey-darken-1" style="font-size: 0.7rem !important;">
+                                                            (S/N: {{ (item.raw || item).numero_serie || 'N/A' }})
+                                                        </span>
+
+                                                        <v-chip v-if="(item.raw || item).a_des_pieces_au_total" size="x-small" color="success" variant="flat" class="ml-2 px-1 font-weight-bold" style="height: 14px; font-size: 0.55rem !important;">
+                                                            COMPLET
                                                         </v-chip>
                                                     </div>
 
-                                                    <div class="text-grey ml-7 mt-1" style="font-size: 0.65rem !important;">
-                                                        Origine : {{ (item.raw || item).nom_materiel }} (S/N Mat : {{ (item.raw || item).numero_serie || 'N/A' }})
+                                                    <div v-if="(item.raw || item).pieces?.length > 0" class="ml-6 mt-1 border-left-dashed pl-2">
+                                                        <div v-for="piece in (item.raw || item).pieces" :key="'inc-piece-' + piece.id" class="d-flex align-center mb-1">
+                                                            <v-icon color="orange-darken-2" size="10" class="mr-1">mdi-plus-circle-outline</v-icon>
+                                                            <span style="font-size: 0.65rem !important;" class="text-grey-darken-2">
+                                                                {{ piece.nom_piece }} (S/N: {{ piece.numero_serie || 'N/A' }})
+                                                            </span>
+                                                        </div>
                                                     </div>
-                                                </div>
-                                            </template>
+                                                </template>
+                                            </div>
 
-                                            <template v-else>
-                                                <div class="d-flex align-center">
-                                                    <v-icon color="teal-darken-2" size="small" class="mr-1">mdi-monitor</v-icon>
-                                                    <span class="font-weight-black text-uppercase" style="font-size: 0.8rem !important;">
-                                                        {{ (item.raw || item).nom_materiel }}
-                                                    </span>
-                                                    <span class="ml-2 text-grey-darken-1" style="font-size: 0.7rem !important;">
-                                                        (S/N: {{ (item.raw || item).numero_serie || 'N/A' }})
-                                                    </span>
-
-                                                    <v-chip v-if="(item.raw || item).a_des_pieces_au_total" size="x-small" color="success" variant="flat" class="ml-2 px-1 font-weight-bold" style="height: 14px; font-size: 0.55rem !important;">
-                                                        COMPLET
-                                                    </v-chip>
-                                                </div>
-
-                                                <div v-if="(item.raw || item).pieces?.length > 0" class="ml-6 mt-1 border-left-dashed pl-2">
-                                                    <div v-for="piece in (item.raw || item).pieces" :key="'inc-piece-' + piece.id" class="d-flex align-center mb-1">
-                                                        <v-icon color="orange-darken-2" size="10" class="mr-1">mdi-plus-circle-outline</v-icon>
-                                                        <span style="font-size: 0.65rem !important;" class="text-grey-darken-2">
-                                                            {{ piece.nom_piece }} (S/N: {{ piece.numero_serie || 'N/A' }})
-                                                        </span>
-                                                    </div>
-                                                </div>
-                                            </template>
+                                            <v-divider vertical class="mx-2" style="height: 20px;"></v-divider>
+                                            <div class="text-right" style="min-width: 40px">
+                                                <span class="text-grey mr-1" style="font-size: 0.6rem !important;">QTÉ:</span>
+                                                <span class="font-weight-black" style="font-size: 0.8rem !important;">
+                                                    {{ (item.raw || item).est_sortie_materiel ? (item.raw || item).nbredemande : (item.raw || item).pieces.length }}
+                                                </span>
+                                            </div>
                                         </div>
-
-                                        <v-divider vertical class="mx-2" style="height: 20px;"></v-divider>
-                                        <div class="text-right" style="min-width: 40px">
-                                            <span class="text-grey mr-1" style="font-size: 0.6rem !important;">QTÉ:</span>
-                                            <span class="font-weight-black" style="font-size: 0.8rem !important;">
-                                                {{ (item.raw || item).est_sortie_materiel ? (item.raw || item).nbredemande : (item.raw || item).pieces.length }}
-                                            </span>
-                                        </div>
-                                    </div>
-                                </v-card>
-                            </td>
-                        </tr>
-                    </template>
-                </v-data-table>
+                                    </v-card>
+                                </td>
+                            </tr>
+                        </template>
+                    </v-data-table>
+                </div>
 
                 <v-divider></v-divider>
                 <div class="pa-2 d-flex align-center justify-space-between bg-white rounded-b-xl">
@@ -266,7 +265,6 @@
                     <v-pagination v-model="demandes.current_page" :length="demandes.last_page" :total-visible="3" @update:model-value="updatePage" density="compact" active-color="teal-darken-2" variant="text"></v-pagination>
                 </div>
             </v-card>
-
 
             <v-dialog v-model="deleteDialog" max-width="400">
                 <v-card class="rounded-xl pa-2">
@@ -288,6 +286,40 @@
 
 <style scoped>
 
+    /* Supprimer la hauteur automatique du tableau pour éviter les conflits */
+    .v-data-table {
+        width: 100%;
+        height: auto !important;
+    }
+
+    .v-data-table__wrapper {
+        overflow: visible !important;
+    }
+
+    /* Pour que le tableau ne force pas sa propre hauteur */
+    .v-table {
+        height: auto !important;
+    }
+
+    /* Personnalisation de la scrollbar */
+    ::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+    }
+
+    ::-webkit-scrollbar-track {
+        background: #f1f1f1;
+        border-radius: 10px;
+    }
+
+    ::-webkit-scrollbar-thumb {
+        background: #c1c1c1;
+        border-radius: 10px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+        background: #a8a8a8;
+    }
 
     /* Ajout d'une bordure fine pour le séparateur de carte */
     .border-t-sm {
@@ -297,7 +329,6 @@
     .border-dashed {
         border-style: dashed !important;
     }
-
 
     .demandes-table :deep(th) {
         background-color: #f8fafc !important;

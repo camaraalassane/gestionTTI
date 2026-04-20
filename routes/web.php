@@ -24,7 +24,20 @@ Route::get('/', function () {
 });
 
 // =========================================================================
-// 1. NAVIGATION ADMIN (Gestion des utilisateurs & Corbeille)
+// ROUTES API POUR CHARGEMENT DYNAMIQUE
+// =========================================================================
+Route::middleware(['auth'])->prefix('api')->group(function () {
+    // Route pour les demandes (sorties) - utilisée par DemandeController
+    Route::get('/modeles/search', [DemandeController::class, 'searchModeles'])->name('api.modeles.search');
+    Route::get('/materiels/by-modele/{modele_id}', [DemandeController::class, 'getMaterielsByModele'])->name('api.materiels.by-modele');
+
+    // AJOUT : Routes pour les statistiques des services
+    Route::get('/service-stats/{serviceId}', [DashboardController::class, 'getServiceStats'])->name('api.service-stats');
+    Route::get('/services-stats', [DashboardController::class, 'getAllServicesStats'])->name('api.services-stats');
+});
+
+// =========================================================================
+// 1. NAVIGATION ADMIN
 // =========================================================================
 Route::middleware(['auth', 'admin'])->name('admin.')->group(function () {
     Route::get('/users', [AdminController::class, 'index'])->name('users.index');
@@ -53,7 +66,7 @@ Route::middleware(['auth', 'verified', 'user.only'])->group(function () {
     Route::post('/auth-code', [MaterielController::class, 'verifyAccess'])->name('materiel.verify');
 
     // ---------------------------------------------------------------------
-    // NAVIGATION DEMANDES
+    // NAVIGATION DEMANDES (ACCÈS SANS CODE)
     // ---------------------------------------------------------------------
     Route::get('/form', [DemandeController::class, 'create'])->name('demandes.create');
     Route::get('/area', [DemandeController::class, 'gestionService'])->name('demandes.gestion_service');
@@ -67,19 +80,21 @@ Route::middleware(['auth', 'verified', 'user.only'])->group(function () {
     Route::put('/sync', [DemandeController::class, 'updateGroupe'])->name('demandes.update_groupe');
     Route::resource('forms', DemandeController::class)->except(['show', 'create'])->names('demandes');
     Route::get('/demandes/export-pdf', [DemandeController::class, 'exportPDF'])->name('demandes.pdf');
-Route::delete('/demandes/commande/{numcomande}', [DemandeController::class, 'destroy_by_commande'])
-    ->name('demandes.destroy_by_commande');
+    Route::delete('/demandes/commande/{numcomande}', [DemandeController::class, 'destroy_by_commande'])->name('demandes.destroy_by_commande');
+
     // ---------------------------------------------------------------------
     // NAVIGATION SÉCURISÉE (Protégée par hasMaterialCode)
     // ---------------------------------------------------------------------
     Route::middleware(['hasMaterialCode'])->group(function () {
 
         Route::get('/main', [DashboardController::class, 'index'])->name('dashboard');
-Route::get('/materiel/{id}/historique', [MaterielController::class, 'historique'])
-    ->name('materiel.historique');
-    Route::get('/materiel/{id}/historique/pdf', [MaterielController::class, 'exportHistorique'])
-    ->name('materiel.historique.pdf');
+        Route::get('/materiel/{id}/historique', [MaterielController::class, 'historique'])->name('materiel.historique');
+        Route::get('/materiel/{id}/historique/pdf', [MaterielController::class, 'exportHistorique'])->name('materiel.historique.pdf');
+
         // 1. Matériel & Stock
+        // Route pour la réception de stock (recherche de modèles)
+        Route::get('/recherche-modeles', [MaterielController::class, 'searchModelesReception'])->name('materiel.recherche-modeles');
+
         Route::put('/modele/{modele}', [MaterielController::class, 'updateModele'])->name('materiel.update.modele');
         Route::get('/list', [MaterielController::class, 'list'])->name('materiel.index');
         Route::get('/materiel/export/{format}', [MaterielController::class, 'export'])->name('materiel.export');
@@ -88,9 +103,10 @@ Route::get('/materiel/{id}/historique', [MaterielController::class, 'historique'
         Route::get('/check-contrat/{numero}', [ReceptionController::class, 'checkContrat'])->name('reception.check');
         Route::resource('asset', MaterielController::class)->except(['index'])->names('materiel');
 
-        // 2. Inventaire / Audit (CORRECTION : Changement du préfixe URL pour éviter conflit)
+        // 2. Inventaire / Audit
+        Route::post('/audit/clear-cache', [InventaireController::class, 'clearCache'])->name('inventaire.clear-cache');
         Route::resource('audit', InventaireController::class)->names('inventaire');
-Route::get('/audit/{id}/pdf', [InventaireController::class, 'downloadPdf'])->name('inventaire.pdf');
+        Route::get('/audit/{id}/pdf', [InventaireController::class, 'downloadPdf'])->name('inventaire.pdf');
 
         // 3. Module Paramètres
         Route::get('/setup', [ParametreController::class, 'index'])->name('parametres.index');

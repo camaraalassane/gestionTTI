@@ -16,12 +16,19 @@
     const statsContrat = ref(null);
     const snEnBaseDeDonnees = ref([]);
 
+    // Pour la recherche de modèles existants
+    const modelesExistants = ref([]);
+    const isLoadingModeles = ref(false);
+    const showModelesList = ref(false);
+    const modeleSelectionne = ref(null);
+
     const infosCommunes = ref({
         fournisseur: "",
         numero_contrat: "",
         quantite_totale_prevue: 0,
         date_livraison: new Date().toISOString().substr(0, 10),
         scan_contrat: null,
+        ancien_scan_path: null,
     });
 
     const articleActuel = ref({
@@ -29,7 +36,7 @@
         categorie_id: null,
         unite: 0,
         nbr_pieces_global: 0,
-        pieces_modeles: [], // Pour stocker les noms des pièces communes
+        pieces_modeles: [],
         nbrcarton: 0,
         details_unites: [
             {
@@ -41,6 +48,64 @@
 
     const panier = ref([]);
 
+    // --- FONCTIONS POUR L'AUTOCOMPLÉTION ---
+    const hideModelesList = () => {
+        setTimeout(() => {
+            showModelesList.value = false;
+        }, 200);
+    };
+
+    // Recherche de modèles existants
+    const rechercherModeles = debounce(async () => {
+        const searchTerm = articleActuel.value.designation;
+
+        if (!searchTerm || searchTerm.trim().length < 2) {
+            modelesExistants.value = [];
+            showModelesList.value = false;
+            return;
+        }
+
+        isLoadingModeles.value = true;
+        try {
+            const response = await axios.get('/recherche-modeles', {
+                params: {
+                    q: searchTerm.trim(),
+                    categorie_id: articleActuel.value.categorie_id || undefined
+                }
+            });
+
+            modelesExistants.value = response.data;
+            showModelesList.value = response.data.length > 0;
+        } catch (error) {
+            console.error("Erreur recherche modèles:", error);
+            modelesExistants.value = [];
+            showModelesList.value = false;
+        } finally {
+            isLoadingModeles.value = false;
+        }
+    }, 400);
+
+    // Sélectionner un modèle existant
+    const selectionnerModeleExistant = (modele) => {
+        modeleSelectionne.value = modele;
+        articleActuel.value.designation = modele.nom;
+        articleActuel.value.categorie_id = modele.categorie_id;
+
+        if (modele.pieces_count === 0) {
+            articleActuel.value.nbr_pieces_global = 0;
+        }
+
+        modelesExistants.value = [];
+        showModelesList.value = false;
+    };
+
+    // Quand la catégorie change, on relance la recherche
+    watch(() => articleActuel.value.categorie_id, () => {
+        if (articleActuel.value.designation && articleActuel.value.designation.length >= 2) {
+            rechercherModeles();
+        }
+    });
+
     // --- LOGIQUE DE GROUPAGE POUR L'AFFICHAGE ---
     const panierGroupe = computed(() => {
         return panier.value.reduce((acc, item) => {
@@ -51,7 +116,7 @@
         }, {});
     });
 
-    // --- LOGIQUE DES PIÈCES COMMUNES (MODÈLE UNIQUE) ---
+    // --- LOGIQUE DES PIÈCES COMMUNES ---
     watch(() => articleActuel.value.nbr_pieces_global, (nouveauNbr) => {
         const nbr = parseInt(nouveauNbr) || 0;
         const modeles = articleActuel.value.pieces_modeles;
@@ -95,7 +160,7 @@
     }, { deep: true });
 
 
-    // --- CALCULS DE VALIDATION & BANDREAU (RÉ-INJECTÉS) ---
+    // --- CALCULS DE VALIDATION & BANDREAU ---
     const totalUnitesPhysiques = computed(() => Number(articleActuel.value.unite) || 0);
 
     const totalUnitesDansPanier = computed(() => {
@@ -108,28 +173,24 @@
             : Number(infosCommunes.value.quantite_totale_prevue) || 0;
     });
 
-    // C'est ce calcul qui alimente ton bandeau HTML
     const resteARecevoir = computed(() => {
         const totalPrevu = totalRef.value;
         const dejaRecuBase = Number(statsContrat.value?.deja_recu) || 0;
-
-        // On ne soustrait PLUS 'dansPanier' ici
         return totalPrevu - dejaRecuBase;
     });
 
-    // Pour l'alerte d'erreur en bas du bandeau
     const resteDynamique = computed(() => {
         return resteARecevoir.value - totalUnitesPhysiques.value;
     });
+
     const surplusDetecte = computed(() => {
         if (totalRef.value <= 0) return false;
-        // Ici, on vérifie : Déjà en base + Déjà dans le panier + Ce qu'on veut ajouter maintenant
         const cumulTotal = (Number(statsContrat.value?.deja_recu) || 0) + totalUnitesDansPanier.value + totalUnitesPhysiques.value;
         return cumulTotal > totalRef.value;
     });
 
 
-    // --- VÉRIFICATION S/N EN BASE (DEBOUNCE) ---
+    // --- VÉRIFICATION S/N EN BASE ---
     const verifierSnEnBase = debounce(async (sn) => {
         if (!sn || sn.length < 3) return;
         try {
@@ -160,16 +221,12 @@
                 contratExisteDeja.value = true;
                 infosCommunes.value.fournisseur = response.data.fournisseur;
                 infosCommunes.value.quantite_totale_prevue = Number(response.data.total_prevu);
-
-                // On stocke le scan existant dans infosCommunes pour le renvoyer au serveur si besoin
                 infosCommunes.value.ancien_scan_path = response.data.scan_contrat;
-
                 statsContrat.value = {
                     deja_recu: Number(response.data.deja_recu) || 0,
                     stock_dispo: Number(response.data.stock_dispo) || 0,
                     total: Number(response.data.total_prevu) || 0,
                     reste: Number(response.data.reste) || 0,
-                    // On peut aussi passer le scan aux stats pour l'affichage
                     scan_existant: response.data.scan_contrat
                 };
             } else {
@@ -184,46 +241,32 @@
         }
     });
 
-    // --- DOUBLONS & ERREURS ---
-    const isDuplicate = (sn) => {
-        if (!sn || sn.trim() === "") return false;
-        const serieBase = articleActuel.value.details_unites[0]?.numeros_serie;
-        if (!serieBase) return false;
-        const formattedSn = sn.trim().toLowerCase();
-        const localOccurrences = serieBase.filter((s) => s?.valeur?.trim().toLowerCase() === formattedSn).length;
-        return localOccurrences > 1 || snEnBaseDeDonnees.value.includes(sn);
-    };
-
-  // --- VALIDATION SIMPLIFIÉE (Plus de S/N à vérifier) ---
-const aDesErreursDansLeLot = computed(() => {
-    const art = articleActuel.value;
-    // On vérifie juste les champs obligatoires
-    if (!art.designation || !art.categorie_id || totalUnitesPhysiques.value <= 0) return true;
-    
-    // Si des pièces sont demandées, on vérifie qu'elles ont un nom
-    if (art.nbr_pieces_global > 0) {
-        return art.pieces_modeles.some(m => !m.nom || m.nom.trim() === "");
-    }
-    return false;
-});
+    // --- VALIDATION DES CHAMPS ---
+    const aDesErreursDansLeLot = computed(() => {
+        const art = articleActuel.value;
+        if (!art.designation || !art.categorie_id || totalUnitesPhysiques.value <= 0) return true;
+        if (art.nbr_pieces_global > 0) {
+            return art.pieces_modeles.some(m => !m.nom || m.nom.trim() === "");
+        }
+        return false;
+    });
 
     // --- GÉNÉRATION DES LIGNES S/N ---
-   watch(totalUnitesPhysiques, (nouveauTotal) => {
-    if (!articleActuel.value.details_unites[0]) {
-        articleActuel.value.details_unites[0] = { nom: articleActuel.value.designation, numeros_serie: [] };
-    }
-    const listeSN = articleActuel.value.details_unites[0].numeros_serie;
-    
-    if (nouveauTotal > listeSN.length) {
-        for (let i = listeSN.length; i < nouveauTotal; i++) {
-            // On pousse des objets vides, le Controller s'occupera du reste
-            listeSN.push({ valeur: "", pieces: [] }); 
+    watch(totalUnitesPhysiques, (nouveauTotal) => {
+        if (!articleActuel.value.details_unites[0]) {
+            articleActuel.value.details_unites[0] = { nom: articleActuel.value.designation, numeros_serie: [] };
         }
-        synchroniserNomsPieces();
-    } else {
-        articleActuel.value.details_unites[0].numeros_serie = listeSN.slice(0, nouveauTotal);
-    }
-});
+        const listeSN = articleActuel.value.details_unites[0].numeros_serie;
+
+        if (nouveauTotal > listeSN.length) {
+            for (let i = listeSN.length; i < nouveauTotal; i++) {
+                listeSN.push({ valeur: "", pieces: [] });
+            }
+            synchroniserNomsPieces();
+        } else {
+            articleActuel.value.details_unites[0].numeros_serie = listeSN.slice(0, nouveauTotal);
+        }
+    });
 
     // --- GESTION DU PANIER ---
     const ajouterAuPanier = () => {
@@ -237,6 +280,7 @@ const aDesErreursDansLeLot = computed(() => {
             ...articleAInserer,
             total_unites: totalUnitesPhysiques.value,
             nom_categorie: cat?.nom || "Inconnue",
+            modele_id: modeleSelectionne.value?.id || null
         });
 
         articleActuel.value = {
@@ -244,6 +288,9 @@ const aDesErreursDansLeLot = computed(() => {
             details_unites: [{ nom: "", numeros_serie: [] }],
         };
         snEnBaseDeDonnees.value = [];
+        modeleSelectionne.value = null;
+        modelesExistants.value = [];
+        showModelesList.value = false;
         tentativeAjout.value = false;
     };
 
@@ -284,18 +331,11 @@ const aDesErreursDansLeLot = computed(() => {
     const handleFileUpload = (e) => {
         infosCommunes.value.scan_contrat = e.target.files[0];
     };
-
-    watch(() => articleActuel.value.designation, (newVal) => {
-        if (articleActuel.value.details_unites[0]) {
-            articleActuel.value.details_unites[0].nom = newVal;
-        }
-    });
 </script>
 
 <template>
 
     <Head title="Réception de Stock" />
-
     <AuthenticatedLayout>
         <v-container fluid class="pa-4 bg-teal-lighten-5 custom-font min-vh-100 d-flex flex-column">
             <v-card class="mb-4 rounded-xl shadow-card border-teal-top flex-shrink-0" elevation="0">
@@ -304,11 +344,9 @@ const aDesErreursDansLeLot = computed(() => {
                         <v-col cols="12" md="2">
                             <v-text-field v-model="infosCommunes.fournisseur" label="Fournisseur" variant="outlined" color="teal-darken-1" density="compact" :readonly="contratExisteDeja" hide-details="auto" class="text-caption"></v-text-field>
                         </v-col>
-
                         <v-col cols="12" md="2">
                             <v-text-field v-model="infosCommunes.numero_contrat" label="N° Contrat / BC" variant="outlined" color="teal-darken-1" density="compact" :loading="isLoadingContrat" hide-details="auto" class="text-caption font-weight-black"></v-text-field>
                         </v-col>
-
                         <v-col cols="12" md="3">
                             <div v-if="statsContrat" class="d-flex align-center bg-grey-lighten-4 pa-2 rounded-lg border" style="height: 40px;">
                                 <div class="flex-grow-1 text-center border-right">
@@ -326,7 +364,6 @@ const aDesErreursDansLeLot = computed(() => {
                             </div>
                             <v-text-field v-else v-model.number="infosCommunes.quantite_totale_prevue" label="Qté Totale Prévue" type="number" variant="outlined" color="teal-darken-1" density="compact" hide-details="auto" class="text-caption font-weight-bold"></v-text-field>
                         </v-col>
-
                         <v-col cols="12" md="3">
                             <v-file-input :key="fileInputKey" :label="infosCommunes.ancien_scan_path ? 'Scan déjà présent (Cliquer pour changer)' : 'Scan document'" variant="outlined" :color="infosCommunes.ancien_scan_path ? 'blue-darken-1' : 'teal-darken-1'" density="compact" hide-details="auto" class="text-caption" prepend-inner-icon="mdi-paperclip" @change="handleFileUpload">
                                 <template v-if="infosCommunes.ancien_scan_path" v-slot:append-inner>
@@ -334,7 +371,6 @@ const aDesErreursDansLeLot = computed(() => {
                                 </template>
                             </v-file-input>
                         </v-col>
-
                         <v-col cols="12" md="2">
                             <v-text-field v-model="infosCommunes.date_livraison" type="date" label="Date" variant="outlined" color="teal-darken-1" density="compact" hide-details="auto" class="text-caption"></v-text-field>
                         </v-col>
@@ -344,70 +380,91 @@ const aDesErreursDansLeLot = computed(() => {
 
             <v-row v-if="!statsContrat || resteARecevoir > 0 || panier.length > 0" class="flex-grow-1 mb-2" no-gutters style="min-height: 0">
                 <v-col cols="12" md="7" class="pr-md-2 d-flex flex-column" style="height: 84vh">
-        <v-card elevation="0" class="rounded-xl shadow-card border overflow-hidden d-flex flex-column h-100">
-            <v-toolbar color="teal-darken-2" density="compact" flat>
-                <v-icon size="x-small" class="ml-4 mr-2">mdi-auto-fix</v-icon>
-                <v-toolbar-title class="text-caption font-weight-bold">SAISIE RAPIDE (GÉNÉRATION AUTO)</v-toolbar-title>
-            </v-toolbar>
+                    <v-card elevation="0" class="rounded-xl shadow-card border overflow-hidden d-flex flex-column h-100">
+                        <v-toolbar color="teal-darken-2" density="compact" flat>
+                            <v-icon size="x-small" class="ml-4 mr-2">mdi-auto-fix</v-icon>
+                            <v-toolbar-title class="text-caption font-weight-bold">SAISIE RAPIDE (GÉNÉRATION AUTO)</v-toolbar-title>
+                        </v-toolbar>
 
-            <div class="pa-4 bg-white border-b">
-                <v-row dense>
-                    <v-col cols="3">
-                        <v-text-field v-model.number="articleActuel.unite" type="number" label="Quantité" variant="outlined" color="teal" density="compact" hide-details class="font-weight-black"></v-text-field>
-                    </v-col>
-                    <v-col cols="3">
-                        <v-text-field v-model.number="articleActuel.nbr_pieces_global" type="number" label="Pièces / Unité" variant="outlined" color="teal" density="compact" hide-details></v-text-field>
-                    </v-col>
-                    <v-col cols="6">
-                        <v-text-field v-model="articleActuel.designation" label="Désignation" variant="outlined" color="teal" density="compact" hide-details class="font-weight-bold"></v-text-field>
-                    </v-col>
-                    <v-col cols="12" class="mt-2">
-                        <v-autocomplete v-model="articleActuel.categorie_id" :items="categories" item-title="nom" item-value="id" label="Catégorie" variant="outlined" color="teal" density="compact" hide-details></v-autocomplete>
-                    </v-col>
-                </v-row>
+                        <div class="pa-4 bg-white border-b">
+                            <v-row dense>
+                                <v-col cols="3">
+                                    <v-text-field v-model.number="articleActuel.unite" type="number" label="Quantité" variant="outlined" color="teal" density="compact" hide-details class="font-weight-black"></v-text-field>
+                                </v-col>
+                                <v-col cols="3">
+                                    <v-text-field v-model.number="articleActuel.nbr_pieces_global" type="number" label="Pièces / Unité" variant="outlined" color="teal" density="compact" hide-details :disabled="modeleSelectionne && modeleSelectionne.pieces_count === 0" :readonly="modeleSelectionne && modeleSelectionne.pieces_count === 0" />
+                                    <div v-if="modeleSelectionne && modeleSelectionne.pieces_count === 0" class="text-caption text-grey mt-1">
+                                        <v-icon size="x-small" class="mr-1">mdi-information</v-icon>
+                                        Ce modèle n'a pas de pièces associées
+                                    </div>
+                                </v-col>
+                                <v-col cols="6" style="position: relative;">
+                                    <v-text-field v-model="articleActuel.designation" label="Désignation" variant="outlined" color="teal" density="compact" hide-details class="font-weight-bold" :loading="isLoadingModeles" @input="rechercherModeles" @focus="showModelesList = modelesExistants.length > 0" @blur="hideModelesList" />
+                                    <!-- Liste des modèles existants -->
+                                    <div v-if="showModelesList" class="autocomplete-list">
+                                        <div v-for="modele in modelesExistants" :key="modele.id" class="autocomplete-item" @mousedown.prevent="selectionnerModeleExistant(modele)">
+                                            <div class="d-flex align-center justify-space-between">
+                                                <span class="text-caption font-weight-bold">{{ modele.nom }}</span>
+                                                <div class="d-flex align-center">
+                                                    <v-chip size="x-small" :color="modele.pieces_count > 0 ? 'teal-lighten-4' : 'grey-lighten-3'" variant="flat">
+                                                        {{ modele.pieces_count > 0 ? modele.pieces_count + ' pièce(s)' : 'Sans pièces' }}
+                                                    </v-chip>
+                                                    <v-chip size="x-small" color="teal-lighten-4" class="ml-1" variant="flat">Existant</v-chip>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div v-if="modelesExistants.length === 0 && !isLoadingModeles" class="autocomplete-item text-grey text-center">
+                                            Aucun modèle trouvé
+                                        </div>
+                                    </div>
+                                </v-col>
+                                <v-col cols="12" class="mt-2">
+                                    <v-autocomplete v-model="articleActuel.categorie_id" :items="categories" item-title="nom" item-value="id" label="Catégorie" variant="outlined" color="teal" density="compact" hide-details />
+                                </v-col>
+                            </v-row>
 
-                <v-expand-transition>
-                    <div v-if="articleActuel.nbr_pieces_global > 0" class="mt-4 pa-3 bg-teal-lighten-5 rounded-lg border border-teal-lighten-4">
-                        <div class="text-caption font-weight-bold text-teal-darken-3 mb-2">NOMMER LES PIÈCES (CHARGEUR, SOURIS...) :</div>
-                        <v-row dense>
-                            <v-col v-for="(mod, mi) in articleActuel.pieces_modeles" :key="mi" cols="4">
-                                <v-text-field v-model="mod.nom" :label="'Nom Pièce ' + (mi + 1)" density="compact" variant="solo" hide-details flat bg-color="white" class="border rounded"></v-text-field>
-                            </v-col>
-                        </v-row>
-                    </div>
-                </v-expand-transition>
-            </div>
+                            <v-expand-transition>
+                                <div v-if="articleActuel.nbr_pieces_global > 0" class="mt-4 pa-3 bg-teal-lighten-5 rounded-lg border border-teal-lighten-4">
+                                    <div class="text-caption font-weight-bold text-teal-darken-3 mb-2">NOMMER LES PIÈCES (CHARGEUR, SOURIS...) :</div>
+                                    <v-row dense>
+                                        <v-col v-for="(mod, mi) in articleActuel.pieces_modeles" :key="mi" cols="4">
+                                            <v-text-field v-model="mod.nom" :label="'Nom Pièce ' + (mi + 1)" density="compact" variant="solo" hide-details flat bg-color="white" class="border rounded"></v-text-field>
+                                        </v-col>
+                                    </v-row>
+                                </div>
+                            </v-expand-transition>
+                        </div>
 
-            <div class="flex-grow-1 overflow-y-auto bg-grey-lighten-4 pa-4">
-                <div v-if="articleActuel.unite > 0">
-                    <v-alert v-if="surplusDetecte" type="error" variant="tonal" class="mb-4 text-caption">
-                        Attention : Vous dépassez la quantité prévue au contrat !
-                    </v-alert>
+                        <div class="flex-grow-1 overflow-y-auto bg-grey-lighten-4 pa-4">
+                            <div v-if="articleActuel.unite > 0">
+                                <v-alert v-if="surplusDetecte" type="error" variant="tonal" class="mb-4 text-caption">
+                                    Attention : Vous dépassez la quantité prévue au contrat !
+                                </v-alert>
 
-                    <v-alert v-else color="teal-darken-1" icon="mdi-information" variant="tonal" class="text-caption">
-                        Vous allez générer <strong>{{ articleActuel.unite }}</strong> matériels. 
-                        Le système créera automatiquement les numéros de série.
-                    </v-alert>
+                                <v-alert v-else color="teal-darken-1" icon="mdi-information" variant="tonal" class="text-caption">
+                                    Vous allez générer <strong>{{ articleActuel.unite }}</strong> matériels.
+                                    Le système créera automatiquement les numéros de série.
+                                </v-alert>
 
-                    <div class="mt-4 d-flex align-center justify-space-between bg-white pa-4 rounded-xl border">
-                        <div>
-                            <div class="text-caption text-grey">Reste après ajout :</div>
-                            <div class="text-h6 font-weight-black" :class="resteDynamique < 0 ? 'text-red' : 'text-teal'">
-                                {{ resteDynamique }} unités
+                                <div class="mt-4 d-flex align-center justify-space-between bg-white pa-4 rounded-xl border">
+                                    <div>
+                                        <div class="text-caption text-grey">Reste après ajout :</div>
+                                        <div class="text-h6 font-weight-black" :class="resteDynamique < 0 ? 'text-red' : 'text-teal'">
+                                            {{ resteDynamique }} unités
+                                        </div>
+                                    </div>
+                                    <v-icon size="large" :color="resteDynamique < 0 ? 'red' : 'teal'">mdi-calculator</v-icon>
+                                </div>
                             </div>
                         </div>
-                        <v-icon size="large" :color="resteDynamique < 0 ? 'red' : 'teal'">mdi-calculator</v-icon>
-                    </div>
-                </div>
-            </div>
 
-            <v-card-actions class="pa-3 border-t bg-white">
-                <v-btn block :disabled="aDesErreursDansLeLot || surplusDetecte" color="teal-darken-2" variant="elevated" @click="ajouterAuPanier">
-                    VALIDER ET AJOUTER AU PANIER
-                </v-btn>
-            </v-card-actions>
-        </v-card>
-    </v-col>
+                        <v-card-actions class="pa-3 border-t bg-white">
+                            <v-btn block :disabled="aDesErreursDansLeLot || surplusDetecte" color="teal-darken-2" variant="elevated" @click="ajouterAuPanier">
+                                VALIDER ET AJOUTER AU PANIER
+                            </v-btn>
+                        </v-card-actions>
+                    </v-card>
+                </v-col>
 
                 <v-col cols="12" md="5" class="pl-md-2 d-flex flex-column mb-4" style="height: 82vh">
                     <v-card elevation="0" class="rounded-xl shadow-card border overflow-hidden d-flex flex-column h-100">
@@ -433,34 +490,26 @@ const aDesErreursDansLeLot = computed(() => {
                         </div>
 
                         <div class="pa-3 bg-white border-t">
-    <v-expand-transition>
-        <div v-if="panier.length > 0 && !infosCommunes.fournisseur" class="mb-3">
-            <v-alert type="warning" density="compact" variant="tonal" class="text-xxs">
-                Veuillez renseigner le <strong>fournisseur</strong> avant de finaliser.
-            </v-alert>
-        </div>
-    </v-expand-transition>
+                            <v-expand-transition>
+                                <div v-if="panier.length > 0 && !infosCommunes.fournisseur" class="mb-3">
+                                    <v-alert type="warning" density="compact" variant="tonal" class="text-xxs">
+                                        Veuillez renseigner le <strong>fournisseur</strong> avant de finaliser.
+                                    </v-alert>
+                                </div>
+                            </v-expand-transition>
 
-    <v-expand-transition>
-        <div v-if="panier.length > 0 && !infosCommunes.numero_contrat" class="mb-3">
-            <v-alert type="warning" density="compact" variant="tonal" class="text-xxs">
-                Le <strong>numéro de contrat</strong> est obligatoire.
-            </v-alert>
-        </div>
-    </v-expand-transition>
+                            <v-expand-transition>
+                                <div v-if="panier.length > 0 && !infosCommunes.numero_contrat" class="mb-3">
+                                    <v-alert type="warning" density="compact" variant="tonal" class="text-xxs">
+                                        Le <strong>numéro de contrat</strong> est obligatoire.
+                                    </v-alert>
+                                </div>
+                            </v-expand-transition>
 
-    <v-btn 
-        block 
-        color="teal-darken-2" 
-        height="54" 
-        @click="submitFinal" 
-        :loading="form.processing" 
-        :disabled="panier.length === 0 || !infosCommunes.fournisseur || !infosCommunes.numero_contrat" 
-        class="rounded-xl font-weight-black shadow-teal"
-    >
-        FINALISER L'ENREGISTREMENT
-    </v-btn>
-</div>
+                            <v-btn block color="teal-darken-2" height="54" @click="submitFinal" :loading="form.processing" :disabled="panier.length === 0 || !infosCommunes.fournisseur || !infosCommunes.numero_contrat" class="rounded-xl font-weight-black shadow-teal">
+                                FINALISER L'ENREGISTREMENT
+                            </v-btn>
+                        </div>
                     </v-card>
                 </v-col>
             </v-row>
@@ -478,9 +527,32 @@ const aDesErreursDansLeLot = computed(() => {
         </v-container>
     </AuthenticatedLayout>
 </template>
-<style scoped>
 
-    /* GARDONS TES RÉGLAGES DE TAILLE POUR LES CHAMPS */
+<style scoped>
+    .autocomplete-list {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        background: white;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        max-height: 250px;
+        overflow-y: auto;
+        z-index: 1000;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }
+
+    .autocomplete-item {
+        padding: 10px 12px;
+        cursor: pointer;
+        border-bottom: 1px solid #f0f0f0;
+    }
+
+    .autocomplete-item:hover {
+        background-color: #e0f2f1;
+    }
+
     .custom-compact-field :deep(.v-field__input) {
         min-height: 40px !important;
         padding-top: 0 !important;
@@ -488,7 +560,6 @@ const aDesErreursDansLeLot = computed(() => {
         font-size: 0.85rem;
     }
 
-    /* FUSION DES DEUX .compact-input EN UN SEUL PROPRE */
     .compact-input :deep(.v-field__input) {
         min-height: 32px !important;
         padding-top: 5px !important;
@@ -500,7 +571,6 @@ const aDesErreursDansLeLot = computed(() => {
         font-family: "Inter", sans-serif !important;
     }
 
-    /* GESTION DU SCROLL INTERNE */
     .overflow-y-auto {
         overflow-y: auto;
     }
@@ -517,7 +587,6 @@ const aDesErreursDansLeLot = computed(() => {
         border-top: 4px solid #00897b !important;
     }
 
-    /* REMISE À L'ÉTAT INITIAL DE TON CONTAINER */
     .v-container {
         height: 100vh;
     }
@@ -538,11 +607,8 @@ const aDesErreursDansLeLot = computed(() => {
 
     .total-badge-teal {
         background: #f1f5f9 !important;
-        /* Gris très clair */
         border: 1px solid #e2e8f0 !important;
-        /* Bordure fine et discrète */
         box-shadow: none !important;
-        /* On enlève l'ombre pour plus de platitude */
     }
 
     .total-badge-vrac {
@@ -569,7 +635,6 @@ const aDesErreursDansLeLot = computed(() => {
         min-width: 80px !important;
     }
 
-    /* AJOUT POUR L'ALIGNEMENT DES INPUTS SANS CASSER LE RESTE */
     .custom-field :deep(.v-input__control) {
         height: 40px !important;
     }

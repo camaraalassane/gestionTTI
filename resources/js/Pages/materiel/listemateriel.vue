@@ -13,35 +13,34 @@
         demande?: { service_beneficiaire: string; demandeur_nom: string };
     }
 
-    interface Materiel {
+    interface ModeleMateriel {
         id: number;
         nom: string;
-        categorie_id: number;
-        categorie: { nom: string };
         qte_materiel: number;
         qte_livree: number;
         qte_pieces: number;
-        modele?: {
-            id: number;
-            nom: string;
-        };
     }
 
-    // Interface pour l'historique
-    interface CommandeHistorique {
-        numcomande: string;
-        date: string;
-        service: string;
-        demandeur: string;
-        materiels: any[];
-        pieces_seules: any[];
+    interface CategorieGroup {
+        id: number;
+        nom: string;
+        modeleMateriels: ModeleMateriel[];
+    }
+
+    // CORRECTION: Ajout de per_page dans l'interface
+    interface PaginatedCategories {
+        data: CategorieGroup[];
+        current_page: number;
+        last_page: number;
+        total: number;
+        from: number;
+        to: number;
+        per_page: number; // Ajout de cette propriété
     }
 
     // --- PROPS ---
-    const props = withDefaults(defineProps<{
-        materiels: { data: Materiel[]; current_page: number; last_page: number };
-        categories: any[];
-        filters: any;
+    const props = defineProps<{
+        categories: PaginatedCategories;
         stats: {
             total: number;
             disponible: number;
@@ -49,30 +48,73 @@
             pieces_sorties: number;
             en_attente: number;
         };
-    }>(), {
-        categories: () => [],
-        stats: () => ({ total: 0, disponible: 0, livres: 0, pieces_sorties: 0, en_attente: 0 })
-    });
+        filters: any;
+        categoriesList: any[];
+    }>();
 
     // --- ÉMITS POUR SNACKBAR ---
     const emit = defineEmits<{
         (e: 'show-snackbar', message: { text: string; color: string }): void;
     }>();
 
-    // --- HEADERS DU TABLEAU ---
-    const headers = [
-        { title: "CATÉGORIE", key: "categorie.nom", align: "start" },
-        { title: "DÉSIGNATION", key: "nom", align: "start" },
-        { title: "UNITÉS (MAGASIN)", key: "qte_materiel", align: "center" },
-        { title: "UNITÉS (LIVRÉES)", key: "qte_livree", align: "center" },
-        { title: "PIÈCES (MAGASIN)", key: "qte_pieces", align: "center" },
-        { title: "ACTIONS", key: "actions", align: "end", sortable: false },
-    ] as const;
+    // --- ÉTATS POUR LE COLLAPSE ---
+    const expandedCategories = ref<Record<number, boolean>>({});
+
+    const toggleCategory = (categorieId: number) => {
+        expandedCategories.value[categorieId] = !expandedCategories.value[categorieId];
+    };
+
+    const isCategoryExpanded = (categorieId: number) => {
+        return expandedCategories.value[categorieId] !== false;
+    };
+
+    // Initialiser toutes les catégories comme ouvertes
+    const initExpandedCategories = () => {
+        if (props.categories?.data) {
+            props.categories.data.forEach(categorie => {
+                if (expandedCategories.value[categorie.id] === undefined) {
+                    expandedCategories.value[categorie.id] = true;
+                }
+            });
+        }
+    };
+
+    onMounted(() => {
+        initExpandedCategories();
+    });
+
+    watch(() => props.categories?.data, () => {
+        initExpandedCategories();
+    }, { immediate: true, deep: true });
 
     // --- LOGIQUE FILTRES ---
     const search = ref(props.filters?.search || "");
     const isLoading = ref(false);
     const isClearing = ref(false);
+
+    const filteredCategories = computed(() => {
+        if (!props.categories?.data) return [];
+
+        const searchTerm = search.value.toLowerCase().trim();
+        if (!searchTerm) return props.categories.data;
+
+        return props.categories.data
+            .map(categorie => {
+                const filteredModeles = (categorie.modeleMateriels || []).filter(modele =>
+                    modele.nom?.toLowerCase().includes(searchTerm)
+                );
+
+                if (filteredModeles.length > 0) {
+                    expandedCategories.value[categorie.id] = true;
+                    return {
+                        ...categorie,
+                        modeleMateriels: filteredModeles
+                    };
+                }
+                return null;
+            })
+            .filter(c => c !== null);
+    });
 
     const appliquerFiltres = () => {
         if (isClearing.value) return;
@@ -85,7 +127,6 @@
                 page: 1
             },
             {
-                only: ['materiels', 'stats', 'filters'],
                 preserveState: true,
                 preserveScroll: true,
                 replace: true,
@@ -125,15 +166,18 @@
     };
 
     const changePage = (page: number) => {
+        isLoading.value = true;
         router.get(route("materiel.index"),
             {
                 page,
                 search: search.value || null
             },
             {
-                only: ['materiels'],
                 preserveScroll: true,
-                preserveState: true
+                preserveState: true,
+                onFinish: () => {
+                    isLoading.value = false;
+                }
             }
         );
     };
@@ -161,12 +205,11 @@
         description: "",
     });
 
-    const openEditModal = (item: any) => {
-        const itemData = item.raw || item;
-        form.id = itemData.id;
-        form.nom = itemData.nom;
-        form.categorie_id = itemData.categorie_id || (itemData.categorie ? itemData.categorie.id : null);
-        form.description = itemData.description || '';
+    const openEditModal = (modele: any) => {
+        form.id = modele.id;
+        form.nom = modele.nom;
+        form.categorie_id = null;
+        form.description = '';
         isEditModalOpen.value = true;
     };
 
@@ -195,7 +238,7 @@
     };
 
     const openDeleteDialog = (item: any) => {
-        itemToDelete.value = item.raw || item;
+        itemToDelete.value = item;
         isDeleteDialogOpen.value = true;
     };
 
@@ -213,14 +256,13 @@
 
     // --- HISTORIQUE ---
     const isHistoryModalOpen = ref(false);
-    const historyData = ref<CommandeHistorique[]>([]);
+    const historyData = ref<any[]>([]);
     const historyLoading = ref(false);
     const selectedModelName = ref("");
     const currentModeleId = ref<number | null>(null);
 
-    const viewHistory = async (item: any) => {
-        const itemData = item.raw || item;
-        const idDuMateriel = itemData.id;
+    const viewHistory = async (modele: any) => {
+        const idDuMateriel = modele.id;
 
         if (!idDuMateriel) {
             emit('show-snackbar', { text: "Erreur : ID matériel introuvable", color: "red" });
@@ -228,7 +270,7 @@
         }
 
         currentModeleId.value = idDuMateriel;
-        selectedModelName.value = itemData.nom;
+        selectedModelName.value = modele.nom;
         isHistoryModalOpen.value = true;
         historyLoading.value = true;
 
@@ -316,63 +358,89 @@
                 </v-col>
             </v-row>
 
-            <!-- TABLEAU -->
+            <!-- TABLEAU GROUPÉ PAR CATÉGORIE AVEC COLLAPSE -->
             <v-card elevation="2" class="rounded-xl border-0 overflow-hidden">
-                <v-data-table :headers="headers" :items="props.materiels.data" :loading="isLoading" item-value="id" class="custom-table" hide-default-footer fixed-header height="60vh">
-                    <template v-slot:item.categorie.nom="{ item, index }">
-                        <div v-if="index === 0 || item.categorie_id !== props.materiels.data[index - 1]?.categorie_id" class="font-weight-black text-teal-darken-4">
-                            {{ item.categorie?.nom?.toUpperCase() || '' }}
+                <div class="scroll-container" style="max-height: 65vh; overflow-y: auto;">
+                    <div v-if="!props.categories?.data || props.categories.data.length === 0" class="text-center pa-8">
+                        <v-icon icon="mdi-database-search" size="64" color="grey-lighten-2" class="mb-4"></v-icon>
+                        <div class="text-h6 text-grey-darken-1">Aucune catégorie trouvée</div>
+                    </div>
+
+                    <template v-else>
+                        <div v-for="categorie in filteredCategories" :key="categorie.id">
+                            <!-- En-tête avec ancienne couleur mais informations visibles -->
+                            <div class="bg-teal-lighten-5 pa-3 mt-3 first:mt-0">
+                                <div class="d-flex align-center">
+                                    <v-btn :icon="isCategoryExpanded(categorie.id) ? 'mdi-chevron-down' : 'mdi-chevron-right'" variant="text" size="small" @click="toggleCategory(categorie.id)" class="mr-1" />
+                                    <v-icon icon="mdi-folder" size="small" class="mr-1" color="teal-darken-2" />
+                                    <span class="font-weight-black text-teal-darken-4 text-uppercase" style="font-size: 0.9rem;">
+                                        {{ categorie.nom }}
+                                    </span>
+                                    <!-- Nombre de modèles - PLUS VISIBLE -->
+                                    <v-chip size="small" color="teal-darken-2" class="ml-2 font-weight-bold text-white">
+                                        📋 {{ categorie.modeleMateriels?.length || 0 }} modèle(s)
+                                    </v-chip>
+                                    <!-- Nombre total d'unités - PLUS VISIBLE -->
+                                    <v-chip size="small" color="teal-darken-4" class="ml-2 font-weight-bold text-white">
+                                        📦 Total: {{categorie.modeleMateriels?.reduce((sum, m) => sum + (m.qte_materiel || 0), 0) || 0}} unités
+                                    </v-chip>
+                                </div>
+                            </div>
+
+                            <v-table v-if="isCategoryExpanded(categorie.id)" density="compact" class="border rounded-b-lg mb-4">
+                                <thead>
+                                    <tr class="bg-grey-lighten-4">
+                                        <th class="text-left">DÉSIGNATION</th>
+                                        <th class="text-center" width="150">UNITÉS (MAGASIN)</th>
+                                        <th class="text-center" width="150">UNITÉS (LIVRÉES)</th>
+                                        <th class="text-center" width="120">PIÈCES (MAGASIN)</th>
+                                        <th class="text-center" width="100">ACTIONS</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="modele in (categorie.modeleMateriels || [])" :key="modele.id">
+                                        <td class="font-weight-bold text-teal-darken-4">{{ modele.nom }}</td>
+                                        <td class="text-center">
+                                            <v-chip color="green-lighten-4" variant="flat" size="small" class="font-weight-bold">
+                                                {{ modele.qte_materiel || 0 }}
+                                            </v-chip>
+                                        </td>
+                                        <td class="text-center">
+                                            <v-chip color="orange-lighten-4" variant="flat" size="small" class="font-weight-bold">
+                                                {{ modele.qte_livree || 0 }}
+                                            </v-chip>
+                                        </td>
+                                        <td class="text-center">
+                                            <v-chip :color="modele.qte_pieces > 0 ? 'orange' : 'grey'" size="small" variant="tonal">
+                                                {{ modele.qte_pieces || 0 }} pièces
+                                            </v-chip>
+                                        </td>
+                                        <td class="text-center">
+                                            <div class="d-flex justify-center gap-2">
+                                                <v-btn icon="mdi-history" variant="text" color="blue-darken-2" size="small" @click="viewHistory(modele)"></v-btn>
+                                                <v-btn icon="mdi-pencil" variant="text" color="teal" size="small" @click="openEditModal(modele)"></v-btn>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </v-table>
                         </div>
-                        <div v-else class="text-grey-lighten-2">
-                            <v-icon icon="mdi-menu-right" size="x-small"></v-icon>
-                        </div>
                     </template>
-
-                    <template v-slot:item.nom="{ item }">
-                        <span class="ml-4 font-weight-bold">{{ item.nom }}</span>
-                    </template>
-
-                    <template v-slot:item.qte_materiel="{ item }">
-                        <div class="text-center font-weight-bold">{{ item.qte_materiel ?? 0 }}</div>
-                    </template>
-
-                    <template v-slot:item.qte_livree="{ item }">
-                        <div class="text-center font-weight-bold text-green-darken-2">{{ item.qte_livree ?? 0 }}</div>
-                    </template>
-
-                    <template v-slot:item.qte_pieces="{ item }">
-                        <v-chip :color="item.qte_pieces > 0 ? 'orange' : 'grey'" size="small" variant="tonal">
-                            {{ item.qte_pieces ?? 0 }} pièces
-                        </v-chip>
-                    </template>
-
-                    <template v-slot:item.actions="{ item }">
-                        <div class="d-flex justify-end gap-2">
-                            <v-btn icon="mdi-history" variant="text" color="blue-darken-2" size="small" @click="viewHistory(item)"></v-btn>
-                            <v-btn icon="mdi-pencil" variant="text" color="teal" size="small" @click="openEditModal(item)"></v-btn>
-                        </div>
-                    </template>
-
-                    <template v-slot:no-data>
-                        <div class="pa-10 text-center">
-                            <v-icon icon="mdi-database-search-outline" size="64" color="grey-lighten-1" class="mb-4"></v-icon>
-                            <div class="text-h6 text-grey-darken-1">Aucun matériel trouvé</div>
-                            <v-btn color="teal" variant="text" class="mt-4" @click="effacerFiltres">Réinitialiser les filtres</v-btn>
-                        </div>
-                    </template>
-                </v-data-table>
+                </div>
 
                 <!-- PAGINATION -->
-                <div class="d-flex align-center justify-between pa-4 bg-white border-t rounded-b-xl">
-                    <div class="text-caption text-grey-darken-1">Page {{ props.materiels.current_page }} sur {{ props.materiels.last_page }}</div>
-                    <v-spacer></v-spacer>
-                    <v-pagination :model-value="props.materiels.current_page" :length="props.materiels.last_page" :total-visible="5" @update:model-value="changePage" rounded="lg" size="small" color="teal-darken-2"></v-pagination>
+                <!-- CORRECTION: Vérifier si per_page existe et si total > per_page -->
+                <div v-if="props.categories && props.categories.total > (props.categories.per_page || 10)" class="d-flex justify-center align-center pa-4">
+                    <v-pagination v-model="props.categories.current_page" :length="props.categories.last_page" :total-visible="5" @update:model-value="changePage" color="teal-darken-3" />
+                    <span class="text-caption text-grey ml-4">
+                        {{ props.categories.from }} - {{ props.categories.to }} sur {{ props.categories.total }} catégories
+                    </span>
                 </div>
             </v-card>
         </v-container>
 
         <!-- MODAL HISTORIQUE -->
-        <v-dialog v-model="isHistoryModalOpen" max-width="800px" scrollable>
+        <v-dialog v-model="isHistoryModalOpen" max-width="800px" scrollable eager>
             <v-card class="rounded-xl">
                 <v-card-title class="bg-teal-darken-3 text-white px-4 py-3">
                     <v-icon icon="mdi-history" class="mr-2"></v-icon>
@@ -396,7 +464,6 @@
 
                     <div v-else class="historique-container">
                         <v-card v-for="commande in historyData" :key="commande.numcomande" variant="outlined" class="mb-3 rounded-lg" density="compact">
-                            <!-- En-tête de la commande -->
                             <div class="d-flex align-center pa-2 bg-grey-lighten-4 border-bottom">
                                 <v-icon icon="mdi-file-document-outline" size="small" color="teal-darken-3" class="mr-2"></v-icon>
                                 <span class="text-caption font-weight-bold text-teal-darken-3">{{ commande.numcomande }}</span>
@@ -406,7 +473,6 @@
                                 </span>
                             </div>
 
-                            <!-- Service et demandeur -->
                             <div class="pa-2 bg-white">
                                 <div class="d-flex align-center mb-1">
                                     <v-icon size="x-small" color="teal-darken-2" class="mr-1">mdi-office-building</v-icon>
@@ -418,7 +484,6 @@
                                 </div>
                             </div>
 
-                            <!-- Matériels livrés -->
                             <div v-if="commande.materiels && commande.materiels.length > 0" class="pa-2 border-top">
                                 <div class="text-caption font-weight-bold text-teal-darken-3 mb-1">
                                     <v-icon icon="mdi-laptop" size="x-small" class="mr-1"></v-icon>
@@ -430,7 +495,6 @@
                                         {{ mat.nom_modele }}
                                         <span class="font-weight-black text-teal-darken-4">({{ mat.numero_serie }})</span>
 
-                                        <!-- Icône pour les pièces attachées -->
                                         <template v-if="mat.pieces && mat.pieces.length > 0">
                                             <v-menu>
                                                 <template v-slot:activator="{ props }">
@@ -450,7 +514,6 @@
                                 </div>
                             </div>
 
-                            <!-- Pièces livrées seules -->
                             <div v-if="commande.pieces_seules && commande.pieces_seules.length > 0" class="pa-2 border-top">
                                 <div class="text-caption font-weight-bold text-teal-darken-3 mb-1">
                                     <v-icon icon="mdi-puzzle" size="x-small" class="mr-1"></v-icon>
@@ -481,7 +544,7 @@
         </v-dialog>
 
         <!-- MODAL ÉDITION -->
-        <v-dialog v-model="isEditModalOpen" max-width="600px" scrollable>
+        <v-dialog v-model="isEditModalOpen" max-width="600px" scrollable eager>
             <v-card class="rounded-xl">
                 <v-card-title class="bg-teal-darken-3 text-white px-6 py-4">
                     Modifier le Matériel
@@ -492,7 +555,7 @@
                             <v-text-field v-model="form.nom" label="Nom du matériel" variant="outlined" rounded="lg" required></v-text-field>
                         </v-col>
                         <v-col cols="12">
-                            <v-select v-model="form.categorie_id" :items="props.categories" item-title="nom" item-value="id" label="Catégorie" variant="outlined" rounded="lg" required></v-select>
+                            <v-select v-model="form.categorie_id" :items="props.categoriesList" item-title="nom" item-value="id" label="Catégorie" variant="outlined" rounded="lg" required></v-select>
                         </v-col>
                         <v-col cols="12">
                             <v-textarea v-model="form.description" label="Description (optionnelle)" variant="outlined" rounded="lg" rows="2" auto-grow></v-textarea>
@@ -509,7 +572,7 @@
         </v-dialog>
 
         <!-- MODAL SUPPRESSION -->
-        <v-dialog v-model="isDeleteDialogOpen" max-width="500px">
+        <v-dialog v-model="isDeleteDialogOpen" max-width="500px" eager>
             <v-card class="rounded-xl">
                 <v-card-title class="bg-orange-darken-4 text-white">Supprimer</v-card-title>
                 <v-card-text class="pa-6">
@@ -528,24 +591,27 @@
 </template>
 
 <style scoped>
-    .custom-table {
-        max-height: 70vh;
+    .scroll-container {
+        max-height: 65vh;
         overflow-y: auto;
     }
 
-    .custom-table :deep(.v-table__wrapper) {
-        overflow-y: auto;
+    .scroll-container::-webkit-scrollbar {
+        width: 6px;
     }
 
-    .custom-table :deep(thead th) {
-        background-color: #f8fafc !important;
-        font-weight: 800 !important;
-        color: #64748b !important;
-        border-bottom: 2px solid #e2e8f0 !important;
+    .scroll-container::-webkit-scrollbar-track {
+        background: #f1f1f1;
+        border-radius: 10px;
     }
 
-    .custom-table :deep(tbody tr:hover) {
-        background-color: #f1f5f9 !important;
+    .scroll-container::-webkit-scrollbar-thumb {
+        background: #c1c1c1;
+        border-radius: 10px;
+    }
+
+    .scroll-container::-webkit-scrollbar-thumb:hover {
+        background: #a8a8a8;
     }
 
     .gap-2 {
@@ -556,13 +622,13 @@
         border: 1px solid #E0E0E0 !important;
     }
 
-    .custom-table::-webkit-scrollbar {
-        width: 8px;
+    :deep(.v-chip) {
+        font-size: 10px;
+        height: 24px;
     }
 
-    .custom-table::-webkit-scrollbar-thumb {
-        background-color: #cbd5e1;
-        border-radius: 4px;
+    :deep(.v-chip .v-icon) {
+        font-size: 12px;
     }
 
     .historique-container {
@@ -590,15 +656,6 @@
 
     .gap-1 {
         gap: 4px;
-    }
-
-    :deep(.v-chip) {
-        font-size: 10px;
-        height: 24px;
-    }
-
-    :deep(.v-chip .v-icon) {
-        font-size: 12px;
     }
 
     :deep(.v-list) {

@@ -4,8 +4,10 @@ namespace App\Http\Controllers;
 
 use App\Models\Reception;
 use App\Models\Materiel;
-use App\Models\Contrat; // Respect de ta minuscule sur le modèle
+use App\Models\Contrat;
+use App\Models\Categorie;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\Request;
@@ -13,137 +15,156 @@ use Illuminate\Http\Request;
 class ReceptionController extends Controller
 {
     /**
-     * Affiche la liste des réceptions (vue principale)
+     * Affiche la liste des CONTRATS groupés
      */
-public function index()
+    public function index()
     {
+        $contrats = Contrat::with(['receptions.categorie'])
+            ->orderBy('created_at', 'desc')
+            ->get();
+
+        $contratsData = [];
+        foreach ($contrats as $contrat) {
+            $categories = [];
+            foreach ($contrat->receptions as $reception) {
+                if ($reception->categorie && !in_array($reception->categorie->nom, $categories)) {
+                    $categories[] = $reception->categorie->nom;
+                }
+            }
+
+            $firstReception = $contrat->receptions->first();
+
+            $contratsData[] = [
+                'id' => $contrat->id,
+                'numero_contrat' => $contrat->numero_contrat,
+                'fournisseur' => $contrat->fournisseur,
+                'date_livraison' => $firstReception ? $firstReception->date_livraison : null,
+                'scan_contrat' => $contrat->scan_contrat,
+                'created_at' => $contrat->created_at,
+                'all_categories' => $categories,
+            ];
+        }
+
+        $perPage = 5;
+        $currentPage = request()->get('page', 1);
+        $paginatedData = collect($contratsData)->forPage($currentPage, $perPage)->values();
+
+        $paginated = new \Illuminate\Pagination\LengthAwarePaginator(
+            $paginatedData,
+            count($contratsData),
+            $perPage,
+            $currentPage,
+            ['path' => request()->url(), 'query' => request()->query()]
+        );
+
         return Inertia::render('materiel/ReceptionContracts', [
-            'receptions' => Reception::with(['categorie:id,nom', 'contrat'])
-                ->orderBy('created_at', 'desc')
-                ->paginate(15)
-                ->withQueryString()
+            'receptions' => $paginated,
         ]);
     }
 
-   /**
- * NOUVEAU : Récupère la liste des différents lots pour la traçabilité
- * Utilisé par la Modale 2
- */
-public function getLotsJson($id)
+    /**
+     * Récupère la liste des différents lots pour la traçabilité
+     * Utilisé par la Modale 2 - GROUPÉ PAR DATE DE LIVRAISON
+     */
+    public function getLotsJson($id)
 {
-    $receptionInitiale = Reception::findOrFail($id);
-    
-    // On récupère toutes les réceptions du contrat
-    $receptions = Reception::where('numero_contrat', $receptionInitiale->numero_contrat)
-        ->with(['materiels.modele', 'materiels.categorie']) // Charge les matériels avec leurs modèles
-        ->orderBy('date_livraison', 'asc')
-        ->get();
+    $results = DB::select("
+        SELECT
+            MIN(r.id) as id,
+            r.date_livraison,
+            SUM(r.unite) as quantite_recue,
+            COUNT(DISTINCT r.id) as nb_receptions
+        FROM receptions r
+        WHERE r.contrat_id = ?
+        GROUP BY r.date_livraison
+        ORDER BY r.date_livraison ASC
+    ", [$id]);
 
-    // On groupe par date de livraison
-    $lots = $receptions->groupBy(function($reception) {
-        return $reception->date_livraison;
-    })->map(function($group, $date) {
-        $premiereReception = $group->first();
-        
-        // Récupérer tous les matériels de ce lot (toutes les réceptions de cette date)
-        $materielsDuLot = collect();
-        foreach ($group as $reception) {
-            $materielsDuLot = $materielsDuLot->concat($reception->materiels);
-        }
-        
-        return [
-            'id' => $premiereReception->id,
-            'date_livraison' => $date,
-            'quantite_recue' => $materielsDuLot->count(),
-            'materiels' => $materielsDuLot->map(function($materiel) {
-                return [
-                    'id' => $materiel->id,
-                    'nom' => $materiel->modele->nom ?? $materiel->nom ?? 'Nom inconnu',
-                    'numero_serie' => $materiel->numero_serie,
-                    'etat' => $materiel->etat,
-                    'statut' => $materiel->statut,
-                    'categorie' => $materiel->categorie->nom ?? null,
-                ];
-            })->values(),
-        ];
-    })->values();
-
-    return response()->json($lots);
+    return response()->json($results);
 }
 
     /**
-     * RÉCUPÉRÉ DE TES DONNÉES : Détails de tous les matériels d'un contrat
-     * Utilisé par la Modale 1
+     * Détails d'un contrat - Groupé par modèle
      */
-public function getMaterielsJson($id)
-{
-    $receptionInitiale = Reception::findOrFail($id);
+    public function getMaterielsJson($id)
+    {
+        $results = DB::select("
+            SELECT
+                mm.nom as designation,
+                COUNT(*) as total,
+                SUM(CASE WHEN m.demande_id IS NULL THEN 1 ELSE 0 END) as qte_stock,
+                SUM(CASE WHEN m.demande_id IS NOT NULL THEN 1 ELSE 0 END) as qte_sorti
+            FROM materiels m
+            INNER JOIN modele_materiels mm ON mm.id = m.modele_materiel_id
+            INNER JOIN receptions r ON r.id = m.reception_id
+            WHERE r.contrat_id = ?
+            GROUP BY mm.id, mm.nom
+            ORDER BY mm.nom
+        ", [$id]);
 
-    return Materiel::whereHas('reception', function ($query) use ($receptionInitiale) {
-            $query->where('numero_contrat', $receptionInitiale->numero_contrat);
-        })
-        ->with([
-            'modele:id,nom',        // ICI : La désignation est dans le modèle
-            'categorie:id,nom', 
-            'pieces:id,materiel_id,nom_piece,statut'
-        ])
-        ->get()
-        ->map(function ($m) {
-            return [
-                'id' => $m->id,
-                'nom' => $m->modele ? $m->modele->nom : 'N/A', // Désignation via la relation
-                'numero_serie' => $m->numero_serie,
-                'etat' => $m->etat,
-                'categorie_nom' => $m->categorie?->nom ?? 'N/A',
-                'pieces' => $m->pieces,
-                'est_complet' => true, // Adaptez selon votre logique
-                'statut' => 'En Stock' // Adaptez selon votre logique
+        $modeles = [];
+        $totalStock = 0;
+        $totalSorti = 0;
+
+        foreach ($results as $row) {
+            $modeles[] = [
+                'designation' => $row->designation,
+                'qte_stock' => (int)$row->qte_stock,
+                'qte_sorti' => (int)$row->qte_sorti,
+                'total' => (int)$row->total
             ];
-        });
-}
-
-    /**
-     * RÉCUPÉRÉ DE TES DONNÉES : API de vérification pour le formulaire
-     */
-public function checkContrat($numero)
-{
-    $contrat = Contrat::where('numero_contrat', $numero)->first();
-
-    if ($contrat) {
-        $stats = Reception::where('numero_contrat', $numero)
-            ->selectRaw('SUM(unite) as total_livre')
-            ->first();
+            $totalStock += (int)$row->qte_stock;
+            $totalSorti += (int)$row->qte_sorti;
+        }
 
         return response()->json([
-            'exists'      => true,
-            'fournisseur' => $contrat->fournisseur,
-            'total_prevu' => (int) $contrat->quantite_totale_prevue,
-            'deja_recu'   => (int) ($stats->total_livre ?? 0),
-            'scan_contrat'=> $contrat->scan_contrat, // On le prend ici !
+            'modeles' => $modeles,
+            'total_materiels' => $totalStock + $totalSorti,
+            'total_modeles' => count($modeles),
+            'total_stock' => $totalStock,
+            'total_sorti' => $totalSorti
         ]);
     }
-    return response()->json(['exists' => false]);
-}
 
     /**
-     * RÉCUPÉRÉ DE TES DONNÉES : Téléchargement du scan physique
+     * API de vérification pour le formulaire
      */
-   public function downloadContrat($id)
+    public function checkContrat($numero)
     {
-        $reception = Reception::findOrFail($id);
+        $contrat = Contrat::where('numero_contrat', $numero)->first();
 
-        if (!$reception->scan_contrat) {
+        if ($contrat) {
+            $totalRecu = Reception::where('contrat_id', $contrat->id)->sum('unite');
+
+            return response()->json([
+                'exists'      => true,
+                'fournisseur' => $contrat->fournisseur,
+                'total_prevu' => (int) $contrat->quantite_totale_prevue,
+                'deja_recu'   => (int) $totalRecu,
+                'scan_contrat'=> $contrat->scan_contrat,
+            ]);
+        }
+        return response()->json(['exists' => false]);
+    }
+
+    /**
+     * Téléchargement du scan physique
+     */
+    public function downloadContrat($id)
+    {
+        $contrat = Contrat::findOrFail($id);
+
+        if (!$contrat->scan_contrat) {
             return back()->with('error', 'Aucun fichier associé.');
         }
 
-        $path = storage_path('app/public/' . $reception->scan_contrat);
+        $path = storage_path('app/public/' . $contrat->scan_contrat);
 
         if (!file_exists($path)) {
             return back()->with('error', 'Fichier introuvable sur le serveur.');
         }
 
-        // CORRECTION : Nettoyer le nom du fichier pour éviter l'erreur Symfony
-        $safeName = str_replace(['/', '\\'], '-', $reception->numero_contrat);
+        $safeName = str_replace(['/', '\\'], '-', $contrat->numero_contrat);
         $extension = pathinfo($path, PATHINFO_EXTENSION);
         $fileName = "Contrat_" . $safeName . "." . $extension;
 
@@ -153,102 +174,193 @@ public function checkContrat($numero)
     }
 
     /**
-     * RÉCUPÉRÉ DE TES DONNÉES : Export PDF Global
+     * Export PDF Global (contrat complet avec TOUTES les réceptions)
      */
- public function exportPdf($id)
-{
-    // 1. Charger la réception avec son contrat
-    $reception = Reception::with('contrat')->findOrFail($id);
+    public function exportPdf($id)
+    {
+        set_time_limit(300);
+        ini_set('memory_limit', '512M');
 
-    // 2. Récupérer les matériels avec OPTIMISATION (with)
-    $materiels = Materiel::whereHas('reception', function ($query) use ($reception) {
-            $query->where('numero_contrat', $reception->numero_contrat);
-        })
-        ->with([
-            'modele',           // AJOUTÉ : Pour avoir le nom du matériel
-            'pieces', 
-            'categorie'
-        ])
-        ->get();
+        $contrat = Contrat::with(['receptions.materiels.modele'])->findOrFail($id);
 
-    // 3. Transformer les données pour s'assurer que le nom est disponible
-    $materielsData = $materiels->map(function($materiel) {
-        return (object)[
-            'id' => $materiel->id,
-            'nom' => $materiel->modele ? $materiel->modele->nom : ($materiel->nom ?? 'N/A'),
-            'numero_serie' => $materiel->numero_serie ?? '—',
-            'etat' => $materiel->etat ?? 'N/A',
-            'statut' => $materiel->statut ?? 'N/A',
-            'categorie' => $materiel->categorie,
-            'pieces' => $materiel->pieces->map(function($piece) {
-                return (object)[
-                    'nom_piece' => $piece->nom_piece,
-                    'numero_serie' => $piece->numero_serie ?? '—',
-                    'statut' => $piece->statut ?? 'N/A'
+        $receptionsByDate = [];
+        $allMateriels = collect();
+
+        foreach ($contrat->receptions as $reception) {
+            $dateKey = $reception->date_livraison ? $reception->date_livraison->format('Y-m-d') : 'date_inconnue';
+
+            if (!isset($receptionsByDate[$dateKey])) {
+                $receptionsByDate[$dateKey] = [
+                    'date_livraison' => $reception->date_livraison,
+                    'materiels' => collect(),
+                    'reception_ids' => []
                 ];
-            })
-        ];
-    });
-
-    // 4. NETTOYER le nom du fichier
-    $safeNumeroContrat = str_replace(['/', '\\', ' ', '.'], '-', $reception->numero_contrat);
-    $fileName = "Inventaire_" . $safeNumeroContrat . ".pdf";
-
-    // 5. Générer le PDF
-    $pdf = Pdf::loadView('pdf.inventaire_contrat', [
-        'reception' => $reception,
-        'materiels' => $materielsData,  // Utiliser les données transformées
-        'date' => now()->format('d/m/Y')
-    ])->setPaper('a4', 'portrait');
-
-    // 6. Retourner le flux avec le nom nettoyé
-    return $pdf->stream($fileName);
-}
-    /**
-     * NOUVEAU : Export PDF spécifique à un SEUL LOT
-     */
-public function exportPdfLot(Request $request, $lotId)
-{
-    try {
-        $ref = Reception::with(['contrat', 'categorie'])->findOrFail($lotId);
-        $dateCible = $ref->date_livraison;
-        $numContrat = $ref->numero_contrat;
-
-        // Récupérer les matériels AVEC la relation 'modele'
-        $materiels = Materiel::whereHas('reception', function ($query) use ($dateCible, $numContrat) {
-                $query->where('date_livraison', $dateCible)
-                      ->where('numero_contrat', $numContrat);
-            })
-            ->with([
-                'modele',           // Pour le nom
-                'pieces', 
-                'categorie:id,nom'
-            ])
-            ->get();
-
-        // Ajouter le nom du modèle à l'objet matériel
-        $materiels->each(function($materiel) {
-            // Si le nom n'est pas défini, utiliser celui du modèle
-            if (!isset($materiel->nom) && $materiel->modele) {
-                $materiel->nom = $materiel->modele->nom;
             }
-        });
+
+            $receptionsByDate[$dateKey]['materiels'] = $receptionsByDate[$dateKey]['materiels']->concat($reception->materiels);
+            $receptionsByDate[$dateKey]['reception_ids'][] = $reception->id;
+            $allMateriels = $allMateriels->concat($reception->materiels);
+        }
+
+        $receptionsGrouped = [];
+        foreach ($receptionsByDate as $dateKey => $data) {
+            $groupedModeles = [];
+            $totalStock = 0;
+            $totalSorti = 0;
+
+            foreach ($data['materiels'] as $materiel) {
+                $nomModele = $materiel->modele->nom ?? 'Modèle inconnu';
+
+                if (!isset($groupedModeles[$nomModele])) {
+                    $groupedModeles[$nomModele] = [
+                        'designation' => $nomModele,
+                        'qte_stock' => 0,
+                        'qte_sorti' => 0,
+                        'total' => 0
+                    ];
+                }
+
+                if ($materiel->demande_id !== null) {
+                    $groupedModeles[$nomModele]['qte_sorti']++;
+                    $totalSorti++;
+                } else {
+                    $groupedModeles[$nomModele]['qte_stock']++;
+                    $totalStock++;
+                }
+                $groupedModeles[$nomModele]['total']++;
+            }
+
+            $receptionsGrouped[] = [
+                'date_livraison' => $data['date_livraison'],
+                'groupes' => array_values($groupedModeles),
+                'total_materiels' => $data['materiels']->count(),
+                'total_modeles' => count($groupedModeles),
+                'total_stock' => $totalStock,
+                'total_sorti' => $totalSorti
+            ];
+        }
+
+        $globalGrouped = [];
+        $globalStock = 0;
+        $globalSorti = 0;
+
+        foreach ($allMateriels as $materiel) {
+            $nomModele = $materiel->modele->nom ?? 'Modèle inconnu';
+
+            if (!isset($globalGrouped[$nomModele])) {
+                $globalGrouped[$nomModele] = [
+                    'designation' => $nomModele,
+                    'qte_stock' => 0,
+                    'qte_sorti' => 0,
+                    'total' => 0
+                ];
+            }
+
+            if ($materiel->demande_id !== null) {
+                $globalGrouped[$nomModele]['qte_sorti']++;
+                $globalSorti++;
+            } else {
+                $globalGrouped[$nomModele]['qte_stock']++;
+                $globalStock++;
+            }
+            $globalGrouped[$nomModele]['total']++;
+        }
+
+        $firstReception = $contrat->receptions->first();
+        $dateLivraison = $firstReception && $firstReception->date_livraison
+            ? $firstReception->date_livraison->format('d/m/Y')
+            : now()->format('d/m/Y');
 
         $pdf = Pdf::loadView('pdf.inventaire_contrat', [
-            'reception' => $ref,
-            'materiels' => $materiels,  // On passe les objets, pas un tableau
-            'titre' => "BON DE RÉCEPTION - LOT DU " . date('d/m/Y', strtotime($dateCible)),
-            'date' => now()->format('d/m/Y')
+            'reception' => (object)[
+                'numero_contrat' => $contrat->numero_contrat,
+                'fournisseur' => $contrat->fournisseur,
+                'date_livraison' => $dateLivraison,
+            ],
+            'receptions_grouped' => $receptionsGrouped,
+            'groupes' => array_values($globalGrouped),
+            'total_materiels' => $allMateriels->count(),
+            'total_modeles' => count($globalGrouped),
+            'total_stock' => $globalStock,
+            'total_sorti' => $globalSorti,
+            'date' => now()->format('d/m/Y H:i'),
+            'is_global' => true,
+            'nb_receptions' => $contrat->receptions->count()
         ])->setPaper('a4', 'portrait');
 
-        $safeNum = str_replace(['/', '\\', ' ', '.'], '-', $numContrat);
-        $fileName = "Lot_" . $safeNum . "_" . date('Ymd', strtotime($dateCible)) . ".pdf";
+        $safeNumeroContrat = str_replace(['/', '\\', ' ', '.'], '-', $contrat->numero_contrat);
+        $fileName = "Inventaire_Global_" . $safeNumeroContrat . ".pdf";
 
         return $pdf->stream($fileName);
-        
-    } catch (\Exception $e) {
-        \Log::error('Erreur exportPdfLot: ' . $e->getMessage());
-        return back()->with('error', 'Erreur lors de la génération du PDF: ' . $e->getMessage());
     }
-}
+
+    /**
+     * Export PDF spécifique à un lot (TOUTES les réceptions de la même date)
+     */
+    public function exportPdfLot(Request $request, $lotId)
+    {
+        set_time_limit(300);
+        ini_set('memory_limit', '512M');
+
+        $firstReception = Reception::with(['contrat'])->findOrFail($lotId);
+        $dateLivraison = $firstReception->date_livraison;
+        $contratId = $firstReception->contrat_id;
+
+        $receptions = Reception::with(['materiels.modele'])
+            ->where('contrat_id', $contratId)
+            ->whereDate('date_livraison', $dateLivraison)
+            ->get();
+
+        $materiels = collect();
+        foreach ($receptions as $reception) {
+            $materiels = $materiels->concat($reception->materiels);
+        }
+
+        $groupedModeles = [];
+        $totalStock = 0;
+        $totalSorti = 0;
+
+        foreach ($materiels as $materiel) {
+            $nomModele = $materiel->modele->nom ?? 'Modèle inconnu';
+
+            if (!isset($groupedModeles[$nomModele])) {
+                $groupedModeles[$nomModele] = [
+                    'designation' => $nomModele,
+                    'qte_stock' => 0,
+                    'qte_sorti' => 0,
+                    'total' => 0
+                ];
+            }
+
+            if ($materiel->demande_id !== null) {
+                $groupedModeles[$nomModele]['qte_sorti']++;
+                $totalSorti++;
+            } else {
+                $groupedModeles[$nomModele]['qte_stock']++;
+                $totalStock++;
+            }
+            $groupedModeles[$nomModele]['total']++;
+        }
+
+        $pdf = Pdf::loadView('pdf.inventaire_contrat', [
+            'reception' => (object)[
+                'numero_contrat' => $firstReception->contrat->numero_contrat,
+                'fournisseur' => $firstReception->contrat->fournisseur,
+                'date_livraison' => $dateLivraison,
+            ],
+            'groupes' => array_values($groupedModeles),
+            'total_materiels' => $materiels->count(),
+            'total_modeles' => count($groupedModeles),
+            'total_stock' => $totalStock,
+            'total_sorti' => $totalSorti,
+            'date' => now()->format('d/m/Y H:i'),
+            'is_lot' => true,
+            'nb_receptions' => $receptions->count()
+        ])->setPaper('a4', 'portrait');
+
+        $safeNum = str_replace(['/', '\\', ' ', '.'], '-', $firstReception->contrat->numero_contrat);
+        $fileName = "Lot_" . $safeNum . "_" . date('Ymd', strtotime($dateLivraison)) . ".pdf";
+
+        return $pdf->stream($fileName);
+    }
 }

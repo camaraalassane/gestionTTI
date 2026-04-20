@@ -1,11 +1,10 @@
 <script setup>
     import AuthenticatedLayout from "@/Layouts/AuthenticatedLayout.vue";
-    import { Head, router } from "@inertiajs/vue3"; // Ajout de router pour la pagination
+    import { Head, router } from "@inertiajs/vue3";
     import { ref, computed } from "vue";
     import axios from "axios";
 
     const props = defineProps({
-        // Correction : On accepte Object (pour la pagination) ou Array
         receptions: [Array, Object],
     });
 
@@ -18,13 +17,12 @@
     const selectedContract = ref({ id: null, numero: "", fournisseur: "" });
     const materielsToShow = ref([]);
     const lotsToShow = ref([]);
+    const currentPage = ref(1);
+    const itemsPerPage = ref(5);
 
-    /** * LOGIQUE DE DONNÉES CORRIGÉE
-     */
-    const filteredAndGroupedReceptions = computed(() => {
+    // Données groupées par contrat
+    const groupedByContrat = computed(() => {
         const groups = {};
-
-        // EXTRACTION SÉCURISÉE DES DONNÉES
         const dataToFilter = props.receptions?.data || props.receptions || [];
 
         const rawFiltered = dataToFilter.filter((item) => {
@@ -43,26 +41,38 @@
             const num = item.numero_contrat;
             if (!groups[num]) {
                 groups[num] = {
-                    ...item,
-                    all_categories: item.categorie?.nom ? [item.categorie.nom] : [],
+                    id: item.id,
+                    numero_contrat: item.numero_contrat,
+                    fournisseur: item.fournisseur,
+                    date_livraison: item.date_livraison,
+                    scan_contrat: item.scan_contrat,
+                    created_at: item.created_at,
+                    all_categories: [],
                 };
-            } else if (
-                item.categorie?.nom &&
-                !groups[num].all_categories.includes(item.categorie.nom)
-            ) {
-                groups[num].all_categories.push(item.categorie.nom);
+            }
+
+            // CORRECTION: Ajouter les catégories depuis les réceptions si disponibles
+            if (item.all_categories && Array.isArray(item.all_categories)) {
+                groups[num].all_categories = [...new Set([...groups[num].all_categories, ...item.all_categories])];
             }
         });
         return Object.values(groups);
     });
 
+    // Pagination des contrats
+    const paginatedContrats = computed(() => {
+        const start = (currentPage.value - 1) * itemsPerPage.value;
+        const end = start + itemsPerPage.value;
+        return groupedByContrat.value.slice(start, end);
+    });
+
+    const totalPages = computed(() => {
+        return Math.ceil(groupedByContrat.value.length / itemsPerPage.value);
+    });
+
     // --- FONCTION DE PAGINATION ---
     const changerPage = (page) => {
-        router.get(window.location.pathname, { page: page }, {
-            preserveState: true,
-            replace: true,
-            only: ['receptions']
-        });
+        currentPage.value = page;
     };
 
     // --- ACTIONS MATÉRIELS ---
@@ -115,6 +125,7 @@
         search.value = "";
         dateDebut.value = "";
         dateFin.value = "";
+        currentPage.value = 1;
     };
 
     const printPage = () => {
@@ -141,7 +152,6 @@
 <template>
 
     <Head title="Archives Contrats" />
-
     <AuthenticatedLayout>
         <template #header> Gestion des Archives </template>
 
@@ -150,7 +160,7 @@
                 <v-card class="rounded-xl border-0 elevation-2 pa-2">
                     <v-row dense align="center" class="px-4 py-2">
                         <v-col cols="12" md="5">
-                            <v-text-field v-model="search" prepend-inner-icon="mdi-magnify" label="Rechercher..." variant="solo-filled" flat density="comfortable" hide-details rounded="lg" color="teal-darken-1" />
+                            <v-text-field v-model="search" prepend-inner-icon="mdi-magnify" label="Rechercher..." variant="solo-filled" flat density="comfortable" hide-details rounded="lg" color="teal-darken-1" clearable />
                         </v-col>
                         <v-col cols="6" md="2">
                             <v-text-field v-model="dateDebut" type="date" label="Depuis le" variant="outlined" density="comfortable" hide-details rounded="lg" color="teal-darken-1" />
@@ -169,42 +179,60 @@
         </v-row>
 
         <v-card class="rounded-xl border-0 elevation-2">
-            <v-data-table :headers="[
-                { title: 'N° CONTRAT', key: 'numero_contrat', sortable: true },
-                { title: 'FOURNISSEUR', key: 'fournisseur', sortable: true },
-                { title: 'CATÉGORIES', key: 'all_categories', sortable: false },
-                { title: 'DATE RÉCEPTION', key: 'date_livraison', align: 'center' },
-                { title: 'TRAÇABILITÉ', key: 'tracabilite', align: 'center', sortable: false },
-                { title: 'ACTIONS', key: 'actions', align: 'end', sortable: false },
-            ]" :items="filteredAndGroupedReceptions" class="modern-table" hover hide-default-footer>
-                <template #[`item.numero_contrat`]="{ item }">
-                    <span class="font-weight-black text-teal-darken-3">{{ item.numero_contrat }}</span>
-                </template>
+            <div class="table-container" style="max-height: 60vh; overflow-y: auto;">
+                <v-data-table :headers="[
+                    { title: 'N° CONTRAT', key: 'numero_contrat', sortable: true },
+                    { title: 'FOURNISSEUR', key: 'fournisseur', sortable: true },
+                    { title: 'CATÉGORIES', key: 'all_categories', sortable: false },
+                    { title: 'DATE RÉCEPTION', key: 'date_livraison', align: 'center' },
+                    { title: 'TRAÇABILITÉ', key: 'tracabilite', align: 'center', sortable: false },
+                    { title: 'ACTIONS', key: 'actions', align: 'end', sortable: false },
+                ]" :items="paginatedContrats" class="modern-table" hover hide-default-footer density="compact">
+                    <template #item.numero_contrat="{ item }">
+                        <span class="font-weight-black text-teal-darken-3">{{ item.numero_contrat }}</span>
+                    </template>
 
-                <template #[`item.all_categories`]="{ item }">
-                    <v-chip v-for="cat in item.all_categories" :key="cat" size="x-small" color="teal-lighten-5" class="mr-1 text-teal-darken-3 font-weight-bold" variant="flat">
-                        {{ cat }}
-                    </v-chip>
-                </template>
+                    <template #item.all_categories="{ item }">
+                        <div class="d-flex flex-wrap gap-1">
+                            <template v-if="item.all_categories && item.all_categories.length > 0">
+                                <v-chip v-for="cat in item.all_categories" :key="cat" size="x-small" color="teal-lighten-5" class="text-teal-darken-3 font-weight-bold" variant="flat">
+                                    {{ cat }}
+                                </v-chip>
+                            </template>
+                            <v-chip v-else size="x-small" color="grey-lighten-3" class="text-grey-darken-2 font-weight-bold" variant="flat">
+                                Non catégorisé
+                            </v-chip>
+                        </div>
+                    </template>
 
-                <template #[`item.tracabilite`]="{ item }">
-                    <v-btn prepend-icon="mdi-layers-triple" color="teal-darken-1" variant="tonal" size="x-small" class="font-weight-bold rounded-lg" @click="openLotsTracabilite(item)">
-                        VOIR LES LOTS
-                    </v-btn>
-                </template>
+                    <template #item.date_livraison="{ item }">
+                        <span class="text-caption">{{ item.date_livraison ? new Date(item.date_livraison).toLocaleDateString('fr-FR') : 'Date inconnue' }}</span>
+                    </template>
 
-                <template #[`item.actions`]="{ item }">
-                    <v-btn icon="mdi-eye-outline" variant="text" color="teal-darken-1" size="small" @click="openDetails(item)" />
-                    <v-btn v-if="item.scan_contrat" icon="mdi-cloud-download-outline" variant="text" color="blue-grey-darken-1" size="small" @click="downloadFile(item.id)" />
-                </template>
-            </v-data-table>
+                    <template #item.tracabilite="{ item }">
+                        <v-btn prepend-icon="mdi-layers-triple" color="teal-darken-1" variant="tonal" size="small" class="font-weight-bold rounded-lg" @click="openLotsTracabilite(item)">
+                            VOIR LES LOTS
+                        </v-btn>
+                    </template>
 
-            <div v-if="props.receptions?.last_page > 1" class="pa-4 border-t d-flex justify-center bg-white">
-                <v-pagination v-model="props.receptions.current_page" :length="props.receptions.last_page" @update:model-value="changerPage" :total-visible="7" color="teal-darken-3" density="comfortable"></v-pagination>
+                    <template #item.actions="{ item }">
+                        <v-btn icon="mdi-eye-outline" variant="text" color="teal-darken-1" size="small" @click="openDetails(item)" />
+                        <v-btn v-if="item.scan_contrat" icon="mdi-cloud-download-outline" variant="text" color="blue-grey-darken-1" size="small" @click="downloadFile(item.id)" />
+                    </template>
+                </v-data-table>
+            </div>
+
+            <!-- PAGINATION PAR CONTRAT -->
+            <div v-if="totalPages > 1" class="pa-4 border-t d-flex justify-center bg-white">
+                <v-pagination v-model="currentPage" :length="totalPages" @update:model-value="changerPage" :total-visible="7" color="teal-darken-3" density="comfortable" size="small" />
+                <span class="text-caption text-grey ml-4">
+                    {{ (currentPage - 1) * itemsPerPage + 1 }} - {{ Math.min(currentPage * itemsPerPage, groupedByContrat.length) }} sur {{ groupedByContrat.length }} contrats
+                </span>
             </div>
         </v-card>
 
-        <v-dialog v-model="showMaterielsDialog" max-width="1000px" scrollable>
+        <!-- MODAL DÉTAILS CONTRAT -->
+        <v-dialog v-model="showMaterielsDialog" max-width="900px" scrollable>
             <v-card class="rounded-xl">
                 <v-card-title class="bg-teal-darken-1 text-white pa-4 d-flex align-center">
                     <v-icon icon="mdi-file-document-check" class="mr-3"></v-icon>
@@ -212,57 +240,72 @@
                     <v-spacer></v-spacer>
                     <v-btn icon="mdi-close" variant="text" @click="showMaterielsDialog = false"></v-btn>
                 </v-card-title>
+
                 <v-card-text class="pa-0">
                     <v-progress-linear v-if="loading" indeterminate color="teal" />
-                    <v-table hover density="comfortable" class="details-table">
-                        <thead>
-                            <tr class="bg-teal-lighten-5">
-                                <th class="text-teal-darken-4 font-weight-black">DÉSIGNATION</th>
-                                <th class="text-center text-teal-darken-4 font-weight-black">N° SÉRIE</th>
-                                <th class="text-center text-teal-darken-4 font-weight-black">ÉTAT</th>
-                                <th class="text-center text-teal-darken-4 font-weight-black">STATUT</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <template v-for="mat in materielsToShow" :key="mat.id">
-                                <tr class="bg-grey-lighten-4">
-                                    <td class="font-weight-bold text-teal-darken-2">
-                                        <v-icon :icon="mat.est_complet ? 'mdi-check-circle' : 'mdi-alert'" :color="mat.est_complet ? 'teal' : 'orange'" size="small" class="mr-2" />
-                                        {{ mat.nom }}
-                                    </td>
-                                    <td class="text-center font-weight-medium">{{ mat.numero_serie }}</td>
-                                    <td class="text-center"><v-chip size="x-small" variant="outlined" color="teal">{{ mat.etat }}</v-chip></td>
+
+                    <div v-else class="details-scroll-container" style="max-height: 60vh; overflow-y: auto;">
+                        <div class="d-flex justify-space-between pa-3 bg-grey-lighten-4 border-b">
+                            <div>📦 Total matériels : <strong>{{ materielsToShow.total_materiels || 0 }}</strong></div>
+                            <div>📋 Total modèles : <strong>{{ materielsToShow.total_modeles || 0 }}</strong></div>
+                            <div>✅ En stock : <strong class="text-green-darken-2">{{ materielsToShow.total_stock || 0 }}</strong></div>
+                            <div>🚚 Sortis : <strong class="text-orange-darken-2">{{ materielsToShow.total_sorti || 0 }}</strong></div>
+                        </div>
+
+                        <v-table hover density="compact" class="details-table">
+                            <thead>
+                                <tr class="bg-teal-lighten-5 sticky-header">
+                                    <th class="text-left">MODÈLE</th>
+                                    <th class="text-center" width="150">EN STOCK (MAGASIN)</th>
+                                    <th class="text-center" width="150">SORTIS</th>
+                                    <th class="text-center" width="100">TOTAL</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="modele in materielsToShow.modeles" :key="modele.designation">
+                                    <td class="font-weight-bold text-teal-darken-4">{{ modele.designation }}</td>
                                     <td class="text-center">
-                                        <v-chip size="x-small" :color="mat.est_complet ? 'teal-darken-1' : 'orange-darken-2'" class="text-white font-weight-black">
-                                            {{ mat.statut }} {{ !mat.est_complet ? "(INCOMPLET)" : "" }}
+                                        <v-chip color="green-lighten-4" variant="flat" size="small" class="font-weight-bold">
+                                            {{ modele.qte_stock }}
+                                        </v-chip>
+                                    </td>
+                                    <td class="text-center">
+                                        <v-chip color="orange-lighten-4" variant="flat" size="small" class="font-weight-bold">
+                                            {{ modele.qte_sorti }}
+                                        </v-chip>
+                                    </td>
+                                    <td class="text-center">
+                                        <v-chip color="teal-lighten-4" variant="flat" size="small" class="font-weight-bold">
+                                            {{ modele.total }}
                                         </v-chip>
                                     </td>
                                 </tr>
-                                <tr v-for="piece in mat.pieces" :key="piece.id" class="text-grey-darken-1">
-                                    <td class="pl-10 text-caption">
-                                        <v-icon icon="mdi-subdirectory-arrow-right" size="14" class="mr-2"></v-icon>
-                                        {{ piece.nom_piece }}
-                                    </td>
-                                    <td class="text-center text-caption italic">{{ piece.numero_serie || "---" }}</td>
-                                    <td class="text-center text-caption">Composant</td>
-                                    <td class="text-center">
-                                        <v-chip size="x-small" :color="piece.statut === 'En Stock' ? 'success' : 'grey'" variant="text" class="font-weight-bold">
-                                            ● {{ piece.statut }}
-                                        </v-chip>
-                                    </td>
+                            </tbody>
+                            <tfoot>
+                                <tr class="bg-grey-lighten-5 font-weight-bold">
+                                    <td class="text-right">TOTAL :</td>
+                                    <td class="text-center">{{ materielsToShow.total_stock || 0 }}</td>
+                                    <td class="text-center">{{ materielsToShow.total_sorti || 0 }}</td>
+                                    <td class="text-center">{{ materielsToShow.total_materiels || 0 }}</td>
                                 </tr>
-                            </template>
-                        </tbody>
-                    </v-table>
+                            </tfoot>
+                        </v-table>
+                    </div>
                 </v-card-text>
+
                 <v-card-actions class="pa-4 bg-grey-lighten-5">
-                    <v-btn prepend-icon="mdi-file-pdf-box" color="red-darken-1" variant="flat" class="rounded-lg text-none font-weight-bold" @click="downloadPdf(selectedContract.id)">Exporter PDF</v-btn>
+                    <v-btn prepend-icon="mdi-file-pdf-box" color="red-darken-1" variant="flat" class="rounded-lg text-none font-weight-bold" @click="downloadPdf(selectedContract.id)">
+                        Exporter PDF
+                    </v-btn>
                     <v-spacer></v-spacer>
-                    <v-btn color="teal-darken-1" variant="text" class="font-weight-bold" @click="showMaterielsDialog = false">Fermer</v-btn>
+                    <v-btn color="teal-darken-1" variant="text" class="font-weight-bold" @click="showMaterielsDialog = false">
+                        Fermer
+                    </v-btn>
                 </v-card-actions>
             </v-card>
         </v-dialog>
 
+        <!-- MODAL TRAÇABILITÉ DES LOTS -->
         <v-dialog v-model="showLotsDialog" max-width="800px">
             <v-card class="rounded-xl">
                 <v-card-title class="bg-teal-darken-4 text-white pa-4 d-flex align-center">
@@ -308,6 +351,25 @@
 </template>
 
 <style scoped>
+    .table-container {
+        max-height: 60vh;
+        overflow-y: auto;
+    }
+
+    .table-container::-webkit-scrollbar {
+        width: 6px;
+    }
+
+    .table-container::-webkit-scrollbar-track {
+        background: #f1f1f1;
+        border-radius: 10px;
+    }
+
+    .table-container::-webkit-scrollbar-thumb {
+        background: #c1c1c1;
+        border-radius: 10px;
+    }
+
     .modern-table :deep(thead th) {
         background-color: #f0fdfa !important;
         font-size: 0.75rem !important;
@@ -323,6 +385,10 @@
 
     .italic {
         font-style: italic;
+    }
+
+    .gap-1 {
+        gap: 4px;
     }
 
     :deep(.v-data-table-footer) {

@@ -26,6 +26,15 @@ class Categorie extends Model
     }
 
     /**
+     * Relation avec les modèles de matériels.
+     * Utilisée pour la liste groupée par catégorie.
+     */
+    public function modeleMateriels(): HasMany
+    {
+        return $this->hasMany(ModeleMateriel::class, 'categorie_id');
+    }
+
+    /**
      * Casts pour le formatage des dates vers Inertia/Vuetify
      */
     protected $casts = [

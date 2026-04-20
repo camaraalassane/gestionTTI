@@ -59,7 +59,7 @@ class ParametreController extends Controller
         $categorie = Categorie::findOrFail($id);
 
         // Vérifier si des matériels utilisent cette catégorie
-        if ($categorie->materels()->exists()) {
+        if ($categorie->materiels()->exists()) {
             return redirect()->back()->withErrors(['error' => 'Impossible de supprimer : cette catégorie contient des matériels.']);
         }
 

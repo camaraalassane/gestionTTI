@@ -4,112 +4,141 @@
     <meta charset="UTF-8">
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
     <style>
-        /* Configuration de la page */
-        @page {
-            margin: 1cm 1.5cm 4cm 1.5cm; /* Marge du bas large (4cm) pour laisser la place aux signatures */
-        }
+        @page { margin: 1cm 1.5cm 1.5cm 1.5cm; }
+        body { font-family: 'Helvetica', sans-serif; font-size: 11px; color: #333; margin: 0; padding: 0; }
 
-        body { font-family: 'Helvetica', sans-serif; font-size: 11px; color: #333; }
+        .header { margin-bottom: 10px; border-bottom: 2px solid #1a237e; padding-bottom: 5px; }
+        .title { text-align: center; color: #1a237e; text-transform: uppercase; margin: 0; font-size: 16px; }
 
-        /* En-tête */
-        .header { margin-bottom: 20px; border-bottom: 2px solid #1a237e; padding-bottom: 10px; }
-        .title { text-align: center; color: #1a237e; text-transform: uppercase; margin: 0; font-size: 18px; }
+        .info-table { width: 100%; margin-bottom: 10px; border-spacing: 0; }
+        .info-table td { padding: 2px 0; border: none; }
 
-        /* Tableaux de données */
-        .table-data { width: 100%; border-collapse: collapse; margin-top: 10px; table-layout: fixed; }
-        .table-data th { background-color: #1a237e; color: white; padding: 8px; font-size: 9px; text-align: left; }
-        .table-data td { padding: 6px; border: 1px solid #ddd; word-wrap: break-word; }
+        .table-data { width: 100%; border-collapse: collapse; margin-top: 5px; }
+        .table-data th { background-color: #1a237e; color: white; padding: 6px; font-size: 10px; text-align: left; }
+        .table-data td { padding: 5px; border: 1px solid #ddd; }
 
-        /* Lignes */
-        .main-row { background-color: #f5f5f5; font-weight: bold; }
-        .piece-row { color: #555; font-size: 10px; }
-        .symbol { color: #999; margin-right: 5px; }
+        .stats-banner { background-color: #f5f5f5; padding: 8px; margin-bottom: 10px; border: 1px solid #ddd; }
 
-        /* POSITIONNEMENT FIXE EN BAS DE PAGE */
-        #footer {
-            position: fixed;
-            bottom: -2.5cm; /* Aligne tout en bas de la marge définie dans @page */
-            left: 0px;
-            right: 0px;
-            height: 3cm;
-        }
+        .text-center { text-align: center; }
+        .text-right { text-align: right; }
+        .bold { font-weight: bold; }
 
-        .signature-table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-        .signature-table td {
-            border: 1px solid #333;
-            width: 45%;
-            height: 100px; /* Hauteur fixe pour les boites */
-            vertical-align: top;
-            padding: 10px;
-            text-align: center;
-        }
-        .signature-space { border: none !important; width: 10%; }
-        .sig-label { font-weight: bold; text-decoration: underline; display: block; margin-bottom: 10px; }
+        .signature-wrapper { margin-top: 30px; page-break-inside: avoid; }
+        .signature-table { width: 100%; border-collapse: collapse; }
+        .signature-table td { border: 1px solid #333; width: 48%; height: 80px; vertical-align: top; padding: 8px; text-align: center; }
+        .spacer { width: 4%; border: none !important; }
     </style>
 </head>
 <body>
 
-    <div id="footer">
+    @php
+        $isGlobal = isset($is_global) && $is_global === true;
+        $isLot = isset($is_lot) && $is_lot === true;
+
+        // Formatage de la date directement sans fonction
+        $dateFormatee = 'Date inconnue';
+        if (isset($reception->date_livraison)) {
+            if ($reception->date_livraison instanceof \Carbon\Carbon) {
+                $dateFormatee = $reception->date_livraison->format('d/m/Y');
+            } elseif (is_string($reception->date_livraison)) {
+                if (preg_match('/^\d{2}\/\d{2}\/\d{4}$/', $reception->date_livraison)) {
+                    $dateFormatee = $reception->date_livraison;
+                } else {
+                    try {
+                        $dateFormatee = \Carbon\Carbon::parse($reception->date_livraison)->format('d/m/Y');
+                    } catch (\Exception $e) {
+                        $dateFormatee = 'Date inconnue';
+                    }
+                }
+            }
+        }
+    @endphp
+
+    <div class="header">
+        <h1 class="title">Fiche d'Inventaire Matériel</h1>
+        <div style="text-align: center; font-size: 9px;">Généré le {{ $date }}</div>
+    </div>
+
+    {{-- Bloc Infos Contrat --}}
+    <table class="info-table">
+        <tr>
+            <td>CONTRAT : <strong>{{ $reception->numero_contrat }}</strong></td>
+            <td class="text-right">FOURNISSEUR : <strong>{{ $reception->fournisseur }}</strong></td>
+        </tr>
+        <tr>
+            <td>
+                @if($isGlobal)
+                    DATE : <strong>Toutes les réceptions</strong>
+                @elseif($isLot)
+                    DATE RÉCEPTION : <strong>{{ $dateFormatee }}</strong>
+                @else
+                    DATE : <strong>{{ $dateFormatee }}</strong>
+                @endif
+            </td>
+            <td class="text-right">
+                @if($isGlobal)
+                    TYPE : <strong>INVENTAIRE GLOBAL</strong>
+                @else
+                    TYPE : <strong>LOT DU {{ $dateFormatee }}</strong>
+                @endif
+            </td>
+        </tr>
+    </table>
+
+    <div class="stats-banner">
+        <strong>RÉSUMÉ :</strong>
+        {{ $total_materiels }} Matériels |
+        {{ $total_modeles }} Modèles |
+        <span style="color:green">{{ $total_stock }} En Stock</span> |
+        <span style="color:orange">{{ $total_sorti }} Sortis</span>
+    </div>
+
+    {{-- Tableau unique --}}
+    <table class="table-data">
+        <thead>
+            <tr>
+                <th width="55%">DÉSIGNATION DU MODÈLE</th>
+                <th width="15%" class="text-center">EN STOCK</th>
+                <th width="15%" class="text-center">SORTIS</th>
+                <th width="15%" class="text-center">TOTAL</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach($groupes as $groupe)
+            <tr>
+                <td class="bold">{{ $groupe['designation'] }}</td>
+                <td class="text-center">{{ $groupe['qte_stock'] }}</td>
+                <td class="text-center">{{ $groupe['qte_sorti'] }}</td>
+                <td class="text-center">{{ $groupe['total'] }}</td>
+            </tr>
+            @endforeach
+        </tbody>
+        <tfoot>
+            <tr style="background-color: #eee; font-weight: bold;">
+                <td class="text-right">TOTAL GÉNÉRAL</td>
+                <td class="text-center">{{ $total_stock }}</td>
+                <td class="text-center">{{ $total_sorti }}</td>
+                <td class="text-center">{{ $total_materiels }}</td>
+            </tr>
+        </tfoot>
+    </table>
+
+    {{-- Signature à la fin --}}
+    <div class="signature-wrapper">
         <table class="signature-table">
             <tr>
                 <td>
-                    <span class="sig-label">Officier materiel</span>
-                    <div style="margin-top: 60px; font-size: 9px; color: #777;">Nom, Date et Signature</div>
+                    <div class="bold" style="text-decoration: underline;">L'Officier Matériel</div>
+                    <div style="margin-top: 35px; font-size: 8px; color: #777;">Date, Nom et Signature</div>
                 </td>
-                <td class="signature-space"></td>
+                <td class="spacer"></td>
                 <td>
-                    <span class="sig-label">Le Fournisseur / Livreur</span>
-                    <div style="margin-top: 60px; font-size: 9px; color: #777;">Nom, Date et Signature</div>
+                    <div class="bold" style="text-decoration: underline;">Le Fournisseur / Livreur</div>
+                    <div style="margin-top: 35px; font-size: 8px; color: #777;">Date, Nom et Signature</div>
                 </td>
             </tr>
         </table>
     </div>
-
-    <div class="header">
-        <h1 class="title">Fiche d'Inventaire Matériel</h1>
-        <div style="text-align: center; margin-top: 5px;">Généré le {{ $date }}</div>
-    </div>
-
-    <table style="width: 100%; margin-bottom: 10px;">
-        <tr>
-            <td style="border:none; padding: 0;">CONTRAT : <strong>{{ $reception->numero_contrat }}</strong></td>
-            <td style="border:none; padding: 0; text-align: right;">FOURNISSEUR : <strong>{{ $reception->fournisseur }}</strong></td>
-        </tr>
-    </table>
-
-    <table class="table-data">
-        <thead>
-            <tr>
-                <th width="45%">Désignation / Composants</th>
-                <th width="25%">N° de Série</th>
-                <th width="15%">État</th>
-                <th width="15%">Statut</th>
-            </tr>
-        </thead>
-        <tbody>
-            @foreach($materiels as $mat)
-                <tr class="main-row">
-                    <td>{{ $mat->nom }}</td>
-                    <td>{{ $mat->numero_serie }}</td>
-                    <td>{{ $mat->etat }}</td>
-                    <td>{{ $mat->statut }}</td>
-                </tr>
-                @foreach($mat->pieces as $piece)
-                    <tr class="piece-row">
-                        <td style="padding-left: 20px;">
-                            <span class="symbol">></span> {{ $piece->nom_piece }}
-                        </td>
-                        <td>{{ $piece->numero_serie ?? 'N/A' }}</td>
-                        <td>Pièce</td>
-                        <td>{{ $piece->statut }}</td>
-                    </tr>
-                @endforeach
-            @endforeach
-        </tbody>
-    </table>
 
 </body>
 </html>
