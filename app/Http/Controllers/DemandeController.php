@@ -6,6 +6,8 @@ use App\Models\Demande;
 use App\Models\Materiel;
 use App\Models\Service;
 use App\Models\PieceMateriel;
+use App\Models\ModeleMateriel;
+use App\Models\Reception;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
@@ -70,58 +72,53 @@ class DemandeController extends Controller
     /**
      * 2. Formulaire de création - SANS LIMITE
      */
-   public function create(Request $request)
-{
-    // Plus besoin de charger les matériels ici !
-    // On charge juste les services
-    return Inertia::render('demandes/create', [
-        'services' => Service::select('id', 'nom')->orderBy('nom')->get(),
-    ]);
-}
-/**
- * API: Recherche de modèles pour chargement dynamique
- */
-/**
- * API: Recherche de modèles pour chargement dynamique
- */
-public function searchModeles(Request $request)
-{
-    $search = $request->get('search', '');
-
-    $query = \App\Models\ModeleMateriel::query()
-        ->select('id', 'nom')
-        ->withCount([
-            'exemplaires as total_materiels' => function($q) {
-                $q->whereNull('demande_id')->whereIn('etat', ['Disponible', 'En stock']);
-            }
+    public function create(Request $request)
+    {
+        return Inertia::render('demandes/create', [
+            'services' => Service::select('id', 'nom')->orderBy('nom')->get(),
         ]);
-
-    if ($search) {
-        $query->where('nom', 'ilike', "%{$search}%");
     }
 
-    // 🔥 Pas de limite pour voir tous les résultats
-    $modeles = $query->get();
+    /**
+     * API: Recherche de modèles pour chargement dynamique
+     */
+    public function searchModeles(Request $request)
+    {
+        $search = $request->get('search', '');
 
-    return response()->json($modeles);
-}
+        $query = ModeleMateriel::query()
+            ->select('id', 'nom')
+            ->withCount([
+                'exemplaires as total_materiels' => function($q) {
+                    $q->whereNull('demande_id')->whereIn('etat', ['Disponible', 'En stock']);
+                }
+            ]);
 
-/**
- * API: Récupérer TOUS les matériels disponibles d'un modèle (sans limite)
- */
-public function getMaterielsByModele($modele_id)
-{
-    $materiels = \App\Models\Materiel::where('modele_materiel_id', $modele_id)
-        ->whereNull('demande_id')
-        ->whereIn('etat', ['Disponible', 'En stock'])
-        ->with(['modele', 'pieces' => function($q) {
-            $q->whereNull('demande_id');
-        }])
-        // SUPPRESSION DU limit(100)
-        ->get();
+        if ($search) {
+            $query->where('nom', 'ilike', "%{$search}%");
+        }
 
-    return response()->json($materiels);
-}
+        $modeles = $query->get();
+
+        return response()->json($modeles);
+    }
+
+    /**
+     * API: Récupérer TOUS les matériels disponibles d'un modèle (sans limite)
+     */
+    public function getMaterielsByModele(int $modele_id)
+    {
+        $materiels = Materiel::where('modele_materiel_id', $modele_id)
+            ->whereNull('demande_id')
+            ->whereIn('etat', ['Disponible', 'En stock'])
+            ->with(['modele', 'pieces' => function($q) {
+                $q->whereNull('demande_id');
+            }])
+            ->get();
+
+        return response()->json($materiels);
+    }
+
     /**
      * 3. Enregistrement du Panier
      */
@@ -198,7 +195,7 @@ public function getMaterielsByModele($modele_id)
                     }
                 }
 
-                return redirect()->route('demandes.index')->with('success', "Commande $numCmd enregistrée avec les S/N mis à jour.");
+                return redirect()->route('demandes.index');
             });
         } catch (\Exception $e) {
             return back()->with('error', "Erreur lors de l'enregistrement : " . $e->getMessage());
@@ -269,76 +266,71 @@ public function getMaterielsByModele($modele_id)
         ]);
     }
 
-  /**
- * 6. Clôturer / Archiver - AVEC DÉDUCTION STOCK SUR LES RÉCEPTIONS
- */
-public function cloturer_groupe(Request $request)
-{
-    $ids = $request->input('ids');
-    if (!$ids || !is_array($ids)) return back()->with('error', 'Sélection invalide.');
+    /**
+     * 6. Clôturer / Archiver - AVEC DÉDUCTION STOCK SUR LES RÉCEPTIONS
+     */
+    public function cloturer_groupe(Request $request)
+    {
+        $ids = $request->input('ids');
+        if (!$ids || !is_array($ids)) return back()->with('error', 'Sélection invalide.');
 
-    try {
-        DB::transaction(function () use ($ids) {
-            $demandes = Demande::with(['materiel.modele'])->whereIn('id', $ids)->get();
+        try {
+            DB::transaction(function () use ($ids) {
+                $demandes = Demande::with(['materiel.modele'])->whereIn('id', $ids)->get();
 
-            foreach ($demandes as $demande) {
-                $service = Service::where('nom', $demande->service_beneficiaire)->first();
-                $quantiteDemandee = (int)$demande->nbredemande;
+                foreach ($demandes as $demande) {
+                    $service = Service::where('nom', $demande->service_beneficiaire)->first();
+                    $quantiteDemandee = (int)$demande->nbredemande;
 
-                // 🔥 DÉDUCTION SUR LES RÉCEPTIONS (FIFO)
-                if ($quantiteDemandee > 0 && $demande->materiel) {
-                    $modeleId = $demande->materiel->modele_materiel_id;
+                    if ($quantiteDemandee > 0 && $demande->materiel) {
+                        $modeleId = $demande->materiel->modele_materiel_id;
 
-                    // Récupérer les réceptions de ce modèle avec stock disponible (FIFO = plus anciennes d'abord)
-                    $receptions = \App\Models\Reception::whereHas('materiels', function($q) use ($modeleId) {
-                            $q->where('modele_materiel_id', $modeleId);
-                        })
-                        ->where('somme', '>', 0)
-                        ->orderBy('date_livraison', 'asc')
-                        ->get();
+                        $receptions = Reception::whereHas('materiels', function($q) use ($modeleId) {
+                                $q->where('modele_materiel_id', $modeleId);
+                            })
+                            ->where('somme', '>', 0)
+                            ->orderBy('date_livraison', 'asc')
+                            ->get();
 
-                    $quantiteRestante = $quantiteDemandee;
+                        $quantiteRestante = $quantiteDemandee;
 
-                    foreach ($receptions as $reception) {
-                        if ($quantiteRestante <= 0) break;
+                        foreach ($receptions as $reception) {
+                            if ($quantiteRestante <= 0) break;
 
-                        $aPrendre = min($quantiteRestante, $reception->somme);
+                            $aPrendre = min($quantiteRestante, $reception->somme);
 
-                        // DÉDUIRE de la colonne somme (stock restant)
-                        $reception->decrement('somme', $aPrendre);
-                        $quantiteRestante -= $aPrendre;
+                            $reception->decrement('somme', $aPrendre);
+                            $quantiteRestante -= $aPrendre;
+                        }
+
+                        if ($quantiteRestante > 0) {
+                            throw new \Exception("Stock insuffisant pour le modèle: " . $demande->nom_materiel);
+                        }
+
+                        Materiel::where('demande_id', $demande->id)->update([
+                            'etat' => 'Livré',
+                            'service_id' => $service ? $service->id : null
+                        ]);
                     }
 
-                    if ($quantiteRestante > 0) {
-                        throw new \Exception("Stock insuffisant pour le modèle: " . $demande->nom_materiel);
-                    }
-
-                    // Mettre à jour les matériels
-                    Materiel::where('demande_id', $demande->id)->update([
-                        'etat' => 'Livré',
-                        'service_id' => $service ? $service->id : null
+                    PieceMateriel::where('demande_id', $demande->id)->update([
+                        'statut' => 'Livré'
                     ]);
+
+                    $demande->update(['statut' => 'Clôturé']);
                 }
+            });
 
-                // Gérer les pièces seules
-                PieceMateriel::where('demande_id', $demande->id)->update([
-                    'statut' => 'Livré'
-                ]);
-
-                $demande->update(['statut' => 'Clôturé']);
-            }
-        });
-
-        return back()->with('success', count($ids) . ' demandes clôturées avec succès.');
-    } catch (\Exception $e) {
-        return back()->with('error', 'Erreur lors de la clôture : ' . $e->getMessage());
+            return back()->with('success', count($ids) . ' demandes clôturées avec succès.');
+        } catch (\Exception $e) {
+            return back()->with('error', 'Erreur lors de la clôture : ' . $e->getMessage());
+        }
     }
-}
 
     /**
      * 7. Mise à jour manuelle du S/N
      */
-    public function updateSerialNumber(Request $request, $id)
+    public function updateSerialNumber(Request $request, int $id)
     {
         $request->validate(['numero_serie' => 'required|string']);
         $demande = Demande::findOrFail($id);
@@ -347,7 +339,10 @@ public function cloturer_groupe(Request $request)
         return back()->with('success', 'Numéro de série mis à jour.');
     }
 
-    public function imprimer_bon(Request $request, $service)
+    /**
+     * 8. Imprimer le bon de commande
+     */
+    public function imprimer_bon(Request $request, string $service)
     {
         $serviceNom = trim($service);
         $demandeur = $request->query('demandeur');
@@ -464,9 +459,12 @@ public function cloturer_groupe(Request $request)
         ]);
     }
 
+    /**
+     * 10. Export PDF
+     */
     public function exportPDF(Request $request)
     {
-        $query = \App\Models\Demande::with(['pieces'])
+        $query = Demande::with(['pieces'])
             ->where('statut', 'Clôturé')
             ->orderBy('date_demande', 'desc')
             ->orderBy('numcomande', 'desc');
@@ -529,9 +527,9 @@ public function cloturer_groupe(Request $request)
     }
 
     /**
-     * 10. Suppression / Annulation
+     * 11. Suppression / Annulation
      */
-    public function destroy_by_commande($numcomande)
+    public function destroy_by_commande(string $numcomande)
     {
         return DB::transaction(function () use ($numcomande) {
             $demandeIds = Demande::where('numcomande', $numcomande)->pluck('id');

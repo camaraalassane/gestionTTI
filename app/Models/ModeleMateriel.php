@@ -11,6 +11,24 @@ class ModeleMateriel extends Model
 {
     protected $fillable = ['nom', 'categorie_id'];
 
+    /**
+     * Bootstrap du modèle
+     */
+    protected static function booted()
+    {
+        // Synchroniser la catégorie des exemplaires quand celle du modèle change
+        static::updated(function ($modele) {
+            if ($modele->wasChanged('categorie_id')) {
+                $modele->exemplaires()->update(['categorie_id' => $modele->categorie_id]);
+            }
+        });
+
+        // Optionnel : synchroniser aussi à la création
+        static::created(function ($modele) {
+            $modele->exemplaires()->update(['categorie_id' => $modele->categorie_id]);
+        });
+    }
+
     // Relation avec la table Categories
     public function categorie(): BelongsTo
     {
@@ -23,7 +41,7 @@ class ModeleMateriel extends Model
         return $this->hasMany(Materiel::class, 'modele_materiel_id');
     }
 
-    // AJOUTÉ : Relation pour compter les pièces à travers les matériels
+    // Relation pour compter les pièces à travers les matériels
     public function pieces(): HasManyThrough
     {
         return $this->hasManyThrough(

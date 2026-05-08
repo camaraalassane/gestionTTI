@@ -46,6 +46,8 @@
                 onSuccess: () => {
                     showCodeModal.value = false;
                     isProcessing.value = false;
+                    // 🔥 REDIRECTION EXPLICITE VERS LE STOCK
+                    router.visit(route('materiel.indexmat'));
                 },
                 onError: (errors) => {
                     isProcessing.value = false;
@@ -66,11 +68,12 @@
 </script>
 
 <template>
+
     <Head title="Portail de Gestion" />
 
     <v-app class="portal-app bg-teal-lighten-5">
         <v-main class="d-flex align-center justify-center">
-            
+
             <v-card class="profile-fixed-top ma-4 ma-md-8 pa-2 pr-4 rounded-pill elevation-2" color="white" style="
                     position: fixed;
                     top: 0;
@@ -116,17 +119,15 @@
                         <v-card @click="handleMaterialAccess" elevation="8" class="module-card pa-8 rounded-xl text-center h-100 d-flex flex-column border-t-lg border-teal-darken-2" color="white">
                             <div class="flex-grow-1">
                                 <v-avatar :color="hasMaterialCode ? 'teal-lighten-5' : 'red-lighten-5'" size="80" class="mb-6">
-                                    <v-icon :icon="hasMaterialCode ? 'mdi-package-variant' : 'mdi-lock-alert'" 
-                                            size="40" 
-                                            :color="hasMaterialCode ? 'teal-darken-2' : 'red-darken-2'"></v-icon>
+                                    <v-icon :icon="hasMaterialCode ? 'mdi-package-variant' : 'mdi-lock-alert'" size="40" :color="hasMaterialCode ? 'teal-darken-2' : 'red-darken-2'"></v-icon>
                                 </v-avatar>
                                 <h2 class="text-h5 font-weight-black mb-4 text-uppercase text-teal-darken-4">
                                     Réception Matériel
                                 </h2>
                                 <p class="text-grey-darken-1 mb-8 text-body-2">
-                                    {{ hasMaterialCode 
-                                        ? "Authentification requise pour gérer l'inventaire." 
-                                        : "Accès restreint : Code d'accès requis." 
+                                    {{ hasMaterialCode
+                                        ? "Authentification requise pour gérer l'inventaire."
+                                        : "Accès restreint : Code d'accès requis."
                                     }}
                                 </p>
                             </div>
@@ -212,8 +213,13 @@
     }
 
     @keyframes fadeIn {
-        from { opacity: 0; }
-        to { opacity: 1; }
+        from {
+            opacity: 0;
+        }
+
+        to {
+            opacity: 1;
+        }
     }
 
     .leading-none {
