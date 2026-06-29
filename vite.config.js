@@ -9,43 +9,18 @@ export default defineConfig({
             input: "resources/js/app.js",
             refresh: true,
         }),
-        vue({
-            template: {
-                transformAssetUrls: {
-                    base: null,
-                    includeAbsolute: false,
-                },
-            },
-        }),
-        vuetify({
-            autoImport: true,
-        }),
+        vue(),
+        vuetify({ autoImport: true }),
     ],
     server: {
         host: "127.0.0.1",
         port: 5175,
         strictPort: true,
         https: false,
-        hmr: {
-            host: "127.0.0.1",
-        },
-    },
-    // AJOUT : Optimisation pour le mode Build (accélère le chargement sur PC Acer)
-    build: {
-        chunkSizeWarningLimit: 1000,
-        rollupOptions: {
-            output: {
-                manualChunks(id) {
-                    if (id.includes('node_modules')) {
-                        return 'vendor'; // Sépare Vuetify et Vue du reste de ton code
-                    }
-                }
-            }
-        }
+        hmr: { host: "127.0.0.1" },
     },
     resolve: {
-        alias: {
-            "@": "/resources/js",
-        },
+        alias: { "@": "/resources/js" },
     },
+    // PAS de build.rollupOptions pour éviter les erreurs
 });

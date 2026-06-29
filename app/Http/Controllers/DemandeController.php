@@ -8,7 +8,9 @@ use App\Models\Service;
 use App\Models\PieceMateriel;
 use App\Models\ModeleMateriel;
 use App\Models\Reception;
+use Illuminate\Support\Str;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Barryvdh\DomPDF\Facade\Pdf;
@@ -16,61 +18,84 @@ use Barryvdh\DomPDF\Facade\Pdf;
 class DemandeController extends Controller
 {
     /**
-     * 1. Liste des demandes "En attente"
+     * Méthode privée partagée : charge toutes les demandes d'une liste de commandes EN UNE SEULE requête
+     * Élimine le problème N+1 présent dans index(), historique() et exportPDF()
+     */
+    private function chargerDemandesParCommandes(\Illuminate\Support\Collection $commandes): \Illuminate\Support\Collection
+    {
+        $numCommandes = $commandes->pluck('numcomande');
+
+        return Demande::whereIn('numcomande', $numCommandes)
+            ->with(['pieces', 'materiel.pieces'])
+            ->get()
+            ->groupBy('numcomande');
+    }
+
+    /**
+     * 1. Liste des demandes "En attente" - GROUPÉE PAR COMMANDE
      */
     public function index(Request $request)
     {
         $search = $request->input('search');
 
-        $demandes = Demande::query()
-            ->select([
-                'id',
+        $commandes = Demande::query()
+            ->select(
                 'numcomande',
-                'date_demande',
-                'demandeur_nom',
-                'service_beneficiaire',
-                'statut',
-                'nom_materiel',
-                'numero_serie',
-                'nbredemande',
-                'materiel_id'
-            ])
-            ->with([
-                'pieces:id,demande_id,nom_piece,numero_serie',
-                'materiel.pieces:id,materiel_id'
-            ])
+                DB::raw('MIN(date_demande) as date_demande'),
+                DB::raw('MIN(demandeur_nom) as demandeur_nom'),
+                DB::raw('MIN(service_beneficiaire) as service_beneficiaire'),
+                DB::raw('MIN(statut) as statut')
+            )
             ->where('statut', 'En attente')
             ->when($search, function ($query, $search) {
-                $query->where(function($q) use ($search) {
+                $query->where(function ($q) use ($search) {
                     $q->where('numcomande', 'like', "%{$search}%")
                       ->orWhere('service_beneficiaire', 'like', "%{$search}%")
-                      ->orWhere('numero_serie', 'like', "%{$search}%")
-                      ->orWhere('nom_materiel', 'like', "%{$search}%");
+                      ->orWhere('demandeur_nom', 'like', "%{$search}%");
                 });
             })
-            ->latest()
-            ->paginate(20)
+            ->groupBy('numcomande')
+            ->orderBy('date_demande', 'desc')
+            ->paginate(10)
             ->withQueryString();
 
-        $demandes->getCollection()->transform(function ($demande) {
-            $demande->date_affichee = $demande->date_demande
-                ? \Carbon\Carbon::parse($demande->date_demande)->format('d/m/Y')
-                : 'Date inconnue';
+        // ✅ UNE SEULE requête pour toutes les demandes de la page
+        $toutesLesDemandes = $this->chargerDemandesParCommandes($commandes->getCollection());
 
-            $demande->est_sortie_materiel = (int)$demande->nbredemande > 0;
-            $demande->a_des_pieces_au_total = $demande->materiel && $demande->materiel->pieces->isNotEmpty();
+        $commandes->getCollection()->transform(function ($commande) use ($toutesLesDemandes) {
+            $demandes = ($toutesLesDemandes->get($commande->numcomande) ?? collect())
+                ->map(function ($demande) {
+                    return [
+                        ...$demande->toArray(),
+                        'est_sortie_materiel'    => (int)$demande->nbredemande > 0,
+                        'a_des_pieces_au_total'  => $demande->materiel && $demande->materiel->pieces->isNotEmpty(),
+                    ];
+                });
 
-            return $demande;
+            return [
+                'numcomande'           => $commande->numcomande,
+                'date_demande'         => $commande->date_demande,
+                'date_affichee'        => $commande->date_demande
+                    ? \Carbon\Carbon::parse($commande->date_demande)->format('d/m/Y')
+                    : 'Date inconnue',
+                'demandeur_nom'        => $commande->demandeur_nom,
+                'service_beneficiaire' => $commande->service_beneficiaire,
+                'statut'               => $commande->statut,
+                'demandes'             => $demandes,
+                'total_items'          => $demandes->sum(function ($d) {
+                    return $d['est_sortie_materiel'] ? $d['nbredemande'] : count($d['pieces']);
+                }),
+            ];
         });
 
         return Inertia::render('demandes/index', [
-            'demandes' => $demandes,
-            'filters' => $request->only(['search'])
+            'commandes' => $commandes,
+            'filters'   => $request->only(['search']),
         ]);
     }
 
     /**
-     * 2. Formulaire de création - SANS LIMITE
+     * 2. Formulaire de création
      */
     public function create(Request $request)
     {
@@ -89,29 +114,27 @@ class DemandeController extends Controller
         $query = ModeleMateriel::query()
             ->select('id', 'nom')
             ->withCount([
-                'exemplaires as total_materiels' => function($q) {
+                'exemplaires as total_materiels' => function ($q) {
                     $q->whereNull('demande_id')->whereIn('etat', ['Disponible', 'En stock']);
-                }
+                },
             ]);
 
         if ($search) {
             $query->where('nom', 'ilike', "%{$search}%");
         }
 
-        $modeles = $query->get();
-
-        return response()->json($modeles);
+        return response()->json($query->get());
     }
 
     /**
-     * API: Récupérer TOUS les matériels disponibles d'un modèle (sans limite)
+     * API: Récupérer TOUS les matériels disponibles d'un modèle
      */
     public function getMaterielsByModele(int $modele_id)
     {
         $materiels = Materiel::where('modele_materiel_id', $modele_id)
             ->whereNull('demande_id')
             ->whereIn('etat', ['Disponible', 'En stock'])
-            ->with(['modele', 'pieces' => function($q) {
+            ->with(['modele', 'pieces' => function ($q) {
                 $q->whereNull('demande_id');
             }])
             ->get();
@@ -120,212 +143,297 @@ class DemandeController extends Controller
     }
 
     /**
-     * 3. Enregistrement du Panier
-     */
-    public function store_group(Request $request)
-    {
-        $validated = $request->validate([
-            'demandeur_nom' => 'required',
-            'service_beneficiaire' => 'required',
-            'date_demande' => 'required|date',
-            'items' => 'required|array',
-            'items.*.materiel_id' => 'required',
-            'items.*.numero_serie' => 'nullable|string',
-            'items.*.mode_sortie' => 'required|in:unite,pieces,complet',
-            'items.*.pieces_ids' => 'sometimes|array',
-            'items.*.pieces_details' => 'sometimes|array',
-            'items.*.description' => 'nullable|string',
-            'items.*.quantite' => 'required|integer|min:1',
-        ]);
+ * 3. Enregistrement du Panier - ÉVITE LES DOUBLONS DE COMMANDE
+ */
 
-        try {
-            return DB::transaction(function () use ($request, $validated) {
-                $prefix = 'CMD-' . date('Y') . '-';
-                $lastDemande = Demande::where('numcomande', 'like', $prefix . '%')->orderBy('id', 'desc')->first();
-                $lastNum = $lastDemande ? intval(substr($lastDemande->numcomande, -4)) : 0;
-                $numCmd = $prefix . str_pad($lastNum + 1, 4, '0', STR_PAD_LEFT);
+public function store_group(Request $request)
+{
+    $validated = $request->validate([
+        'demandeur_nom'            => 'required',
+        'service_beneficiaire'     => 'required',
+        'date_demande'             => 'required|date',
+        'items'                    => 'required|array',
+        'items.*.materiel_id'      => 'required',
+        'items.*.numero_serie'     => 'nullable|string',
+        'items.*.mode_sortie'      => 'required|in:unite,pieces,complet',
+        'items.*.pieces_ids'       => 'sometimes|array',
+        'items.*.pieces_details'   => 'sometimes|array',
+        'items.*.description'      => 'nullable|string',
+        'items.*.quantite'         => 'required|integer|min:1',
+    ]);
 
-                foreach ($validated['items'] as $item) {
-                    $mat = Materiel::with(['modele', 'categorie'])->findOrFail($item['materiel_id']);
+    try {
+        return DB::transaction(function () use ($request, $validated) {
+            $annee  = date('Y');
+            $prefix = "CMD-{$annee}-";
 
-                    if (!empty($item['numero_serie']) && $item['mode_sortie'] !== 'pieces') {
-                        $mat->update(['numero_serie' => $item['numero_serie']]);
-                    }
+            // ✅ FIX : lockForUpdate() empêche deux transactions simultanées
+            //          de lire le même MAX et de générer le même numéro.
+            //          LIKE + ORDER BY + LIMIT 1 est plus robuste que MAX(CAST(...))
+            //          car il ne dépend pas du format interne du suffixe.
+            $derniere = Demande::where('numcomande', 'like', $prefix . '%')
+                ->orderBy('numcomande', 'desc')
+                ->lockForUpdate()
+                ->value('numcomande');
 
-                    $quantiteMateriel = ($item['mode_sortie'] === 'pieces') ? 0 : $item['quantite'];
-                    $nomMateriel = $mat->modele ? $mat->modele->nom : $mat->nom;
-                    $modeleMaterielId = $mat->modele_materiel_id ?? $mat->modele->id ?? null;
+            // ✅ FIX : extraire le suffixe numérique sans SUBSTRING positionnel.
+            //          str_replace() retire le préfixe connu ; ce qui reste est
+            //          le padding numérique, quelle que soit sa longueur.
+            $dernierNum = $derniere
+                ? (int) str_replace($prefix, '', $derniere)
+                : 0;
 
-                    if (!$modeleMaterielId) {
-                        throw new \Exception("Impossible de déterminer le modèle du matériel ID: " . $mat->id);
-                    }
+            $numCmd = $prefix . str_pad($dernierNum + 1, 4, '0', STR_PAD_LEFT);
 
-                    $demande = Demande::create([
-                        'numcomande' => $numCmd,
-                        'materiel_id' => $mat->id,
-                        'modele_materiel_id' => $modeleMaterielId,
-                        'nom_materiel' => $nomMateriel,
-                        'nbredemande' => $quantiteMateriel,
-                        'numero_serie' => $item['numero_serie'] ?? $mat->numero_serie,
-                        'categorie' => $mat->categorie->nom ?? 'N/A',
-                        'demandeur_nom' => $validated['demandeur_nom'],
-                        'service_beneficiaire' => $validated['service_beneficiaire'],
-                        'date_demande' => $validated['date_demande'],
-                        'statut' => 'En attente',
-                        'description' => $item['description'] ?? '',
-                    ]);
+            Log::info("Création commande : {$numCmd}");
 
-                    if (!empty($item['pieces_details'])) {
-                        foreach ($item['pieces_details'] as $pDetail) {
-                            if (isset($pDetail['id'])) {
-                                DB::table('pieces_materiels')->where('id', $pDetail['id'])->update([
-                                    'numero_serie' => $pDetail['numero_serie'] ?? null,
-                                    'demande_id'   => $demande->id,
-                                    'statut'       => 'En attente'
-                                ]);
-                            }
+            foreach ($validated['items'] as $item) {
+                $mat = Materiel::with(['modele', 'categorie'])->findOrFail($item['materiel_id']);
+
+                if (!empty($item['numero_serie']) && $item['mode_sortie'] !== 'pieces') {
+                    $mat->update(['numero_serie' => $item['numero_serie']]);
+                }
+
+                $quantiteMateriel = ($item['mode_sortie'] === 'pieces') ? 0 : $item['quantite'];
+                $nomMateriel      = $mat->modele ? $mat->modele->nom : $mat->nom;
+                $modeleMaterielId = $mat->modele_materiel_id ?? $mat->modele->id ?? null;
+
+                if (!$modeleMaterielId) {
+                    throw new \Exception("Impossible de déterminer le modèle du matériel ID: {$mat->id}");
+                }
+
+                $demande = Demande::create([
+                    'numcomande'           => $numCmd,
+                    'materiel_id'          => $mat->id,
+                    'modele_materiel_id'   => $modeleMaterielId,
+                    'nom_materiel'         => $nomMateriel,
+                    'nbredemande'          => $quantiteMateriel,
+                    'numero_serie'         => $item['numero_serie'] ?? $mat->numero_serie,
+                    'categorie'            => $mat->categorie->nom ?? 'N/A',
+                    'demandeur_nom'        => $validated['demandeur_nom'],
+                    'service_beneficiaire' => $validated['service_beneficiaire'],
+                    'date_demande'         => $validated['date_demande'],
+                    'statut'               => 'En attente',
+                    'description'          => $item['description'] ?? '',
+                ]);
+
+                if (!empty($item['pieces_details'])) {
+                    foreach ($item['pieces_details'] as $pDetail) {
+                        if (isset($pDetail['id'])) {
+                            DB::table('pieces_materiels')->where('id', $pDetail['id'])->update([
+                                'numero_serie' => $pDetail['numero_serie'] ?? null,
+                                'demande_id'   => $demande->id,
+                                'statut'       => 'En attente',
+                            ]);
                         }
-                    }
-
-                    if ($item['mode_sortie'] === 'unite' || $item['mode_sortie'] === 'complet') {
-                        $mat->update([
-                            'demande_id' => $demande->id,
-                            'etat' => 'En attente'
-                        ]);
                     }
                 }
 
-                return redirect()->route('demandes.index');
-            });
-        } catch (\Exception $e) {
-            return back()->with('error', "Erreur lors de l'enregistrement : " . $e->getMessage());
-        }
+                if ($item['mode_sortie'] === 'unite' || $item['mode_sortie'] === 'complet') {
+                    $mat->update([
+                        'demande_id' => $demande->id,
+                        'etat'       => 'En attente',
+                    ]);
+                }
+            }
+
+            return redirect()->route('demandes.index');
+        });
+    } catch (\Exception $e) {
+        Log::error('Erreur store_group: ' . $e->getMessage());
+        return back()->with('error', "Erreur lors de l'enregistrement : " . $e->getMessage());
     }
+}
+
 
     /**
      * 4. Validation (Mise à jour avec Verrouillage)
      */
-    public function validerGroupe(Request $request)
-    {
-        $ids = $request->input('ids');
-        if (empty($ids)) return back()->with('error', "Aucune sélection.");
 
-        try {
-            return DB::transaction(function () use ($ids) {
-                $demandes = Demande::with('materiel')->whereIn('id', $ids)->get();
+public function validerGroupe(Request $request)
+{
+    $ids = $request->input('ids');
+    if (empty($ids)) return back()->with('error', "Aucune sélection.");
 
-                foreach ($demandes as $demande) {
-                    $service = Service::where('nom', $demande->service_beneficiaire)->first();
+    try {
+        return DB::transaction(function () use ($ids) {
+            // ✅ FIX : lockForUpdate() bloque les lignes pour la durée de la
+            //          transaction. Une seconde requête concurrent devra attendre
+            //          la fin de celle-ci avant de lire les mêmes lignes.
+            $demandes = Demande::with('materiel')
+                ->whereIn('id', $ids)
+                ->lockForUpdate()
+                ->get();
 
-                    PieceMateriel::where('demande_id', $demande->id)->update(['statut' => 'Livré']);
-
-                    if ((int)$demande->nbredemande > 0 && $demande->materiel && $demande->materiel->demande_id == $demande->id) {
-                        $demande->materiel->update([
-                            'etat' => 'Livré',
-                            'service_id' => $service ? $service->id : $demande->materiel->service_id
-                        ]);
-                    } else if ((int)$demande->nbredemande == 0 && $demande->materiel) {
-                        $demande->materiel->update([
-                            'demande_id' => null,
-                            'etat' => 'Disponible'
-                        ]);
-                    }
-
-                    $demande->update(['statut' => 'Validé']);
+            foreach ($demandes as $demande) {
+                // ✅ FIX : vérifier le statut courant pour éviter une double
+                //          validation si la transaction précédente a déjà basculé
+                //          le statut (garde-fou applicatif en plus du verrou DB).
+                if ($demande->statut !== 'En attente') {
+                    continue;
                 }
-                return back()->with('success', "Validation terminée.");
-            });
-        } catch (\Exception $e) {
-            return back()->with('error', "Erreur : " . $e->getMessage());
-        }
+
+                $service = Service::where('nom', $demande->service_beneficiaire)->first();
+
+                PieceMateriel::where('demande_id', $demande->id)->update(['statut' => 'Livré']);
+
+                if ((int)$demande->nbredemande > 0 && $demande->materiel && $demande->materiel->demande_id == $demande->id) {
+                    $demande->materiel->update([
+                        'etat'       => 'Livré',
+                        'service_id' => $service ? $service->id : $demande->materiel->service_id,
+                    ]);
+                } elseif ((int)$demande->nbredemande == 0 && $demande->materiel) {
+                    $demande->materiel->update([
+                        'demande_id' => null,
+                        'etat'       => 'Disponible',
+                    ]);
+                }
+
+                $demande->update(['statut' => 'Validé']);
+            }
+
+            return back()->with('success', "Validation terminée.");
+        });
+    } catch (\Exception $e) {
+        return back()->with('error', "Erreur : " . $e->getMessage());
     }
+}
+
 
     /**
      * 5. Gestion par Service
      */
-    public function gestionService()
-    {
-        $demandes = Demande::where('statut', '!=', 'Clôturé')
-            ->with(['pieces:id,demande_id,nom_piece,numero_serie', 'materiel.pieces'])
-            ->select('id', 'materiel_id', 'nom_materiel', 'numero_serie', 'service_beneficiaire', 'statut', 'nbredemande', 'demandeur_nom', 'description', 'date_demande')
-            ->latest()
-            ->get();
 
-        $demandes->transform(function ($demande) {
-            $demande->est_uniquement_piece = (int)$demande->nbredemande == 0;
-            $demande->a_des_pieces_au_total = $demande->materiel && $demande->materiel->pieces->isNotEmpty();
-            $demande->date_affichee = $demande->date_demande
-                ? \Carbon\Carbon::parse($demande->date_demande)->format('d/m/Y')
-                : 'N/A';
-            return $demande;
-        });
+public function gestionService(Request $request)
+{
+    // ✅ FIX : paginate(50) au lieu de get(). Le front-end reçoit les données
+    //          page par page. On garde le même format de réponse Inertia, mais
+    //          $demandes est maintenant un LengthAwarePaginator au lieu d'une
+    //          Collection — Inertia le sérialise automatiquement avec les liens.
+    $query = Demande::where('statut', '!=', 'Clôturé')
+        ->with(['pieces:id,demande_id,nom_piece,numero_serie', 'materiel.pieces'])
+        ->select(
+            'id', 'materiel_id', 'nom_materiel', 'numero_serie',
+            'service_beneficiaire', 'statut', 'nbredemande',
+            'demandeur_nom', 'description', 'date_demande'
+        )
+        ->latest();
 
-        return Inertia::render('demandes/GestionService', [
-            'demandes' => $demandes,
-            'services' => Service::select('id', 'nom')->get()
-        ]);
+    // ✅ FIX : filtre optionnel par service pour réduire encore le volume
+    if ($request->filled('service')) {
+        $query->where('service_beneficiaire', $request->service);
     }
+
+    // ✅ FIX : filtre optionnel par statut
+    if ($request->filled('statut')) {
+        $query->where('statut', $request->statut);
+    }
+
+    $demandes = $query->paginate(50)->withQueryString();
+
+    $demandes->getCollection()->transform(function ($demande) {
+        $demande->est_uniquement_piece    = (int)$demande->nbredemande == 0;
+        $demande->a_des_pieces_au_total   = $demande->materiel && $demande->materiel->pieces->isNotEmpty();
+        $demande->date_affichee           = $demande->date_demande
+            ? \Carbon\Carbon::parse($demande->date_demande)->format('d/m/Y')
+            : 'N/A';
+        return $demande;
+    });
+
+    return Inertia::render('demandes/GestionService', [
+        'demandes' => $demandes,
+        'services' => Service::select('id', 'nom')->get(),
+        'filters'  => $request->only(['service', 'statut']),
+    ]);
+}
+
 
     /**
-     * 6. Clôturer / Archiver - AVEC DÉDUCTION STOCK SUR LES RÉCEPTIONS
-     */
-    public function cloturer_groupe(Request $request)
-    {
-        $ids = $request->input('ids');
-        if (!$ids || !is_array($ids)) return back()->with('error', 'Sélection invalide.');
+ * 6. Clôturer / Archiver - AVEC DÉDUCTION STOCK SUR LES RÉCEPTIONS
+ */
+public function cloturer_groupe(Request $request)
+{
+    $ids = $request->input('ids');
+    if (!$ids || !is_array($ids)) return back()->with('error', 'Sélection invalide.');
 
-        try {
-            DB::transaction(function () use ($ids) {
-                $demandes = Demande::with(['materiel.modele'])->whereIn('id', $ids)->get();
+    try {
+        DB::transaction(function () use ($ids) {
+            $demandes = Demande::with('materiel')->whereIn('id', $ids)->get();
 
-                foreach ($demandes as $demande) {
-                    $service = Service::where('nom', $demande->service_beneficiaire)->first();
-                    $quantiteDemandee = (int)$demande->nbredemande;
-
-                    if ($quantiteDemandee > 0 && $demande->materiel) {
-                        $modeleId = $demande->materiel->modele_materiel_id;
-
-                        $receptions = Reception::whereHas('materiels', function($q) use ($modeleId) {
-                                $q->where('modele_materiel_id', $modeleId);
-                            })
-                            ->where('somme', '>', 0)
-                            ->orderBy('date_livraison', 'asc')
-                            ->get();
-
-                        $quantiteRestante = $quantiteDemandee;
-
-                        foreach ($receptions as $reception) {
-                            if ($quantiteRestante <= 0) break;
-
-                            $aPrendre = min($quantiteRestante, $reception->somme);
-
-                            $reception->decrement('somme', $aPrendre);
-                            $quantiteRestante -= $aPrendre;
-                        }
-
-                        if ($quantiteRestante > 0) {
-                            throw new \Exception("Stock insuffisant pour le modèle: " . $demande->nom_materiel);
-                        }
-
-                        Materiel::where('demande_id', $demande->id)->update([
-                            'etat' => 'Livré',
-                            'service_id' => $service ? $service->id : null
-                        ]);
-                    }
-
-                    PieceMateriel::where('demande_id', $demande->id)->update([
-                        'statut' => 'Livré'
-                    ]);
-
-                    $demande->update(['statut' => 'Clôturé']);
+            // 1. Calculer les quantités totales par modèle
+            $totauxParModele = [];
+            foreach ($demandes as $demande) {
+                $quantite = (int)$demande->nbredemande;
+                if ($quantite > 0 && $demande->materiel) {
+                    $modeleId = $demande->materiel->modele_materiel_id;
+                    $totauxParModele[$modeleId] = ($totauxParModele[$modeleId] ?? 0) + $quantite;
                 }
-            });
+            }
 
-            return back()->with('success', count($ids) . ' demandes clôturées avec succès.');
-        } catch (\Exception $e) {
-            return back()->with('error', 'Erreur lors de la clôture : ' . $e->getMessage());
-        }
+            // 2. VÉRIFICATION DU STOCK DISPONIBLE AVANT DÉDUCTION
+            foreach ($totauxParModele as $modeleId => $quantiteTotaleRequise) {
+                $stockDisponible = Materiel::where('modele_materiel_id', $modeleId)
+                    ->whereNull('service_id')
+                    ->whereIn('etat', ['Disponible', 'En stock'])
+                    ->count();
+
+                if ($stockDisponible < $quantiteTotaleRequise) {
+                    $nomModele = ModeleMateriel::find($modeleId)?->nom ?? "ID: $modeleId";
+                    throw new \Exception("Stock insuffisant pour le modèle: $nomModele. Disponible: $stockDisponible, Demandé: $quantiteTotaleRequise");
+                }
+            }
+
+            // 3. DÉDUCTION DU STOCK (uniquement pour clôture)
+            foreach ($totauxParModele as $modeleId => $quantiteTotaleRequise) {
+                $receptions = Reception::whereHas('materiels', function ($q) use ($modeleId) {
+                        $q->where('modele_materiel_id', $modeleId);
+                    })
+                    ->where('somme', '>', 0)
+                    ->orderBy('date_livraison', 'asc')
+                    ->lockForUpdate()
+                    ->get();
+
+                $resteADeduire = $quantiteTotaleRequise;
+
+                foreach ($receptions as $reception) {
+                    if ($resteADeduire <= 0) break;
+                    $aPrendre = min($resteADeduire, $reception->somme);
+                    $reception->decrement('somme', $aPrendre);
+                    $resteADeduire -= $aPrendre;
+                }
+
+                if ($resteADeduire > 0) {
+                    $nomMat = $demandes->firstWhere('materiel.modele_materiel_id', $modeleId)->nom_materiel ?? 'Inconnu';
+                    throw new \Exception("Stock insuffisant pour le modèle: $nomMat (Manquant: $resteADeduire)");
+                }
+            }
+
+            // 4. MISE À JOUR DES MATÉRIELS ET DEMANDES
+            foreach ($demandes as $demande) {
+                $service = Service::where('nom', $demande->service_beneficiaire)->first();
+
+                // Matériel associé
+                if ((int)$demande->nbredemande > 0 && $demande->materiel) {
+                    $demande->materiel->update([
+                        'etat'       => 'Livré',
+                        'service_id' => $service ? $service->id : null,
+                    ]);
+                }
+
+                // Pièces détachées
+                PieceMateriel::where('demande_id', $demande->id)->update([
+                    'statut' => 'Livré'
+                ]);
+
+                $demande->update(['statut' => 'Clôturé']);
+            }
+        });
+
+        return back()->with('success', count($ids) . ' demandes clôturées avec succès.');
+    } catch (\Exception $e) {
+        return back()->with('error', 'Erreur lors de la clôture : ' . $e->getMessage());
     }
+}
 
     /**
      * 7. Mise à jour manuelle du S/N
@@ -342,189 +450,324 @@ class DemandeController extends Controller
     /**
      * 8. Imprimer le bon de commande
      */
-    public function imprimer_bon(Request $request, string $service)
-    {
-        $serviceNom = trim($service);
-        $demandeur = $request->query('demandeur');
 
-        $query = Demande::with([
-            'pieces',
-            'materiel',
-            'modele'
-        ])->where('service_beneficiaire', $serviceNom);
+public function imprimer_bon(Request $request, string $service)
+{
+    $serviceNom = trim($service);
+    $demandeur  = $request->query('demandeur');
 
+    // ✅ FIX PRINCIPAL : si un numéro de commande est fourni, on l'utilise
+    //    pour charger UNIQUEMENT les lignes de cette commande.
+    //    Un bon de commande représente UNE commande — pas tout le service.
+    $numcomande = $request->query('numcomande');
+
+    $query = Demande::with(['pieces', 'materiel', 'modele'])
+        ->where('service_beneficiaire', $serviceNom)
+        ->whereIn('statut', ['Validé', 'En attente', 'Clôturé']);
+
+    if ($numcomande) {
+        // ✅ Cas nominal : une commande précise → aucune limite nécessaire
+        $query->where('numcomande', $numcomande);
+    } else {
+        // ✅ FIX FALLBACK : si pas de numcomande, on filtre par demandeur et
+        //    on limite à 200 lignes pour éviter la saturation.
         if ($demandeur) {
             $query->where('demandeur_nom', $demandeur);
         }
+        $query->latest()->limit(200);
+    }
 
-        $demandes = $query->whereIn('statut', ['Validé', 'En attente', 'Clôturé'])->get();
+    $demandes = $query->get();
 
-        if ($demandes->isEmpty()) {
-            return back()->with('error', "Aucune demande trouvée.");
+    if ($demandes->isEmpty()) {
+        return back()->with('error', "Aucune demande trouvée.");
+    }
+
+    $demandesPretes = $demandes->map(function ($demande) {
+        $quantite    = $demande->nombre_article ?? $demande->nbredemande ?? 0;
+        $nomMateriel = $demande->nom_materiel;
+
+        if (empty($nomMateriel) && $demande->modele) {
+            $nomMateriel = $demande->modele->nom;
+        }
+        if (empty($nomMateriel) && $demande->materiel && $demande->materiel->modele) {
+            $nomMateriel = $demande->materiel->modele->nom;
         }
 
-        $demandesPretes = $demandes->map(function ($demande) {
-            $quantite = $demande->nombre_article ?? $demande->nbredemande ?? 0;
-            $nomMateriel = $demande->nom_materiel;
+        return [
+            'id'                    => $demande->id,
+            'numcomande'            => $demande->numcomande,
+            'nom_materiel'          => $nomMateriel ?: 'MATÉRIEL',
+            'numero_serie'          => $demande->numero_serie ?? ($demande->materiel->numero_serie ?? '—'),
+            'nbredemande'           => $quantite,
+            'demandeur_nom'         => $demande->demandeur_nom,
+            'description'           => $demande->description,
+            'pieces'                => $demande->pieces->map(fn ($p) => [
+                'id'           => $p->id,
+                'nom_piece'    => $p->nom_piece,
+                'numero_serie' => $p->numero_serie ?? '—',
+            ]),
+            'est_uniquement_piece'  => (int)$quantite === 0,
+            'a_des_pieces_au_total' => $demande->materiel
+                ? $demande->materiel->pieces()->exists()
+                : false,
+        ];
+    });
 
-            if (empty($nomMateriel) && $demande->modele) {
-                $nomMateriel = $demande->modele->nom;
-            }
+    return Inertia::render('demandes/BonCommande', [
+        'service'    => $serviceNom,
+        'demandes'   => $demandesPretes,
+        'numcomande' => $numcomande,
+        'demandeur'  => $demandeur ?? ($demandes->first()->demandeur_nom ?? ''),
+        'date'       => $request->query('date') ?? now()->format('d/m/Y'),
+    ]);
+}
 
-            if (empty($nomMateriel) && $demande->materiel && $demande->materiel->modele) {
-                $nomMateriel = $demande->materiel->modele->nom;
-            }
+  /**
+ * 9. Historique - Pagination uniforme (10 par page TOUJOURS)
+ */
+public function historique(Request $request)
+{
+    $commandesQuery = Demande::query()
+        ->select(
+            'numcomande',
+            DB::raw('MIN(date_demande) as date_demande'),
+            DB::raw('MIN(service_beneficiaire) as service_beneficiaire'),
+            DB::raw('MIN(demandeur_nom) as demandeur_nom'),
+            DB::raw('MIN(statut) as statut')
+        )
+        ->where('statut', 'Clôturé');
 
-            return [
-                'id' => $demande->id,
-                'numcomande' => $demande->numcomande,
-                'nom_materiel' => $nomMateriel ?: 'MATÉRIEL',
-                'numero_serie' => $demande->numero_serie ?? ($demande->materiel->numero_serie ?? '—'),
-                'nbredemande' => $quantite,
-                'demandeur_nom' => $demande->demandeur_nom,
-                'description' => $demande->description,
-                'pieces' => $demande->pieces->map(function($p) {
-                    return [
-                        'id' => $p->id,
-                        'nom_piece' => $p->nom_piece,
-                        'numero_serie' => $p->numero_serie ?? '—'
-                    ];
-                }),
-                'est_uniquement_piece' => (int)$quantite === 0,
-                'a_des_pieces_au_total' => $demande->materiel ? $demande->materiel->pieces()->exists() : false,
-            ];
+    // === FILTRES ===
+    if ($request->filled('service')) {
+        $commandesQuery->where('service_beneficiaire', $request->service);
+    }
+    if ($request->filled('year')) {
+        $commandesQuery->whereYear('date_demande', $request->year);
+    }
+    if ($request->filled('month')) {
+        $commandesQuery->whereMonth('date_demande', $request->month);
+    }
+    if ($request->filled('search')) {
+        $search = $request->search;
+
+        // ✅ CONVERSION DE DATE (dd/mm/yyyy → yyyy-mm-dd) pour PostgreSQL
+        if (preg_match('/^\d{2}\/\d{2}\/\d{4}$/', $search)) {
+            [$d, $m, $y] = explode('/', $search);
+            $search = "$y-$m-$d";
+        }
+
+        $commandesQuery->where(function ($q) use ($search) {
+            $q->where('numcomande', 'ilike', "%{$search}%")
+                ->orWhere('service_beneficiaire', 'ilike', "%{$search}%")
+                ->orWhere('demandeur_nom', 'ilike', "%{$search}%")
+                ->orWhere('nom_materiel', 'ilike', "%{$search}%")
+                ->orWhere('date_demande', 'ilike', "%{$search}%");
         });
-
-        return Inertia::render('demandes/BonCommande', [
-            'service'   => $serviceNom,
-            'demandes'  => $demandesPretes,
-            'demandeur' => $demandeur ?? ($demandes->first()->demandeur_nom ?? ''),
-            'date'      => $request->query('date') ?? now()->format('d/m/Y')
-        ]);
     }
 
-    /**
-     * 9. Historique
-     */
-    public function historique(Request $request)
-    {
-        $query = Demande::with(['pieces', 'materiel.pieces'])
-            ->where('statut', 'Clôturé');
+    $commandes = $commandesQuery
+        ->groupBy('numcomande')
+        ->orderBy('date_demande', 'desc')
+        ->paginate(10)
+        ->withQueryString();
 
-        if ($request->filled('service')) {
-            $query->where('service_beneficiaire', $request->service);
-        }
+    // ✅ Une seule requête pour toutes les demandes de la page
+    $toutesLesDemandes = $this->chargerDemandesParCommandes($commandes->getCollection());
 
-        if ($request->filled('year')) {
-            $query->whereYear('date_demande', $request->year);
-        }
+    $commandes->getCollection()->transform(function ($commande) use ($toutesLesDemandes) {
 
-        if ($request->filled('month')) {
-            if ($request->filled('year')) {
-                $query->whereMonth('date_demande', $request->month);
-            } else {
-                $query->whereYear('date_demande', date('Y'))
-                      ->whereMonth('date_demande', $request->month);
-            }
-        }
+        $demandes = ($toutesLesDemandes->get($commande->numcomande) ?? collect())
+            ->map(function ($demande) {
 
-        if ($request->filled('search')) {
-            $search = $request->search;
-            $query->where(function($q) use ($search) {
-                $q->where('nom_materiel', 'like', "%{$search}%")
-                  ->orWhere('service_beneficiaire', 'like', "%{$search}%")
-                  ->orWhere('numero_serie', 'like', "%{$search}%")
-                  ->orWhere('numcomande', 'like', "%{$search}%")
-                  ->orWhereHas('pieces', function($sq) use ($search) {
-                      $sq->where('numero_serie', 'like', "%{$search}%");
-                  });
+                // ✅ FIX PRINCIPAL : mapper pieces en tableau simple de scalaires
+                $piecesMappees = ($demande->pieces ?? collect())->map(fn ($p) => [
+                    'id'           => $p->id,
+                    'nom_piece'    => $p->nom_piece,
+                    'numero_serie' => $p->numero_serie ?? null,
+                ])->values()->all();
+
+                // ✅ Calculs booléens APRÈS le mapping des pièces
+                $nbPieces         = count($piecesMappees);
+                $nbredemande      = (int) $demande->nbredemande;
+
+                $estSortieUniquementPiece = $nbredemande === 0 && $nbPieces > 0;
+
+                $aDesPiecesAuTotal = $demande->materiel
+                    && $demande->materiel->pieces
+                    && $demande->materiel->pieces->count() > 0;
+
+                return [
+                    'id'                          => $demande->id,
+                    'nom_materiel'                => $demande->nom_materiel,
+                    'numero_serie'                => $demande->numero_serie,
+                    'nbredemande'                 => $nbredemande,
+                    'date_demande'                => $demande->date_demande,
+                    'service_beneficiaire'        => $demande->service_beneficiaire,
+                    'demandeur_nom'               => $demande->demandeur_nom,
+                    'description'                 => $demande->description,
+                    'pieces'                      => $piecesMappees,
+                    'a_des_pieces_au_total'       => $aDesPiecesAuTotal,
+                    'est_sortie_uniquement_piece' => $estSortieUniquementPiece,
+                ];
             });
+
+        return [
+            'numcomande'           => $commande->numcomande,
+            'date_demande'         => $commande->date_demande,
+            'service_beneficiaire' => $commande->service_beneficiaire,
+            'demandeur_nom'        => $commande->demandeur_nom,
+            'statut'               => $commande->statut,
+            'demandes'             => $demandes,
+            'total_items'          => $demandes->count(),
+        ];
+    });
+
+    return Inertia::render('demandes/Historique', [
+        'historique' => $commandes,
+        'services'   => Service::select('id', 'nom')->orderBy('nom')->get(),
+        'filters'    => [
+            'search'  => $request->input('search', ''),
+            'year'    => $request->input('year', ''),
+            'month'   => $request->input('month', ''),
+            'service' => $request->input('service', ''),
+        ],
+    ]);
+}
+
+
+
+public function exportPDF(Request $request)
+{
+    // ⚡ Augmenter la mémoire
+    ini_set('memory_limit', '2048M');
+    set_time_limit(600);
+
+    // ── 1. Construire la requête des commandes ──────────────────────────
+    $commandesQuery = Demande::query()
+        ->select(
+            'numcomande',
+            DB::raw('MIN(date_demande) as date_demande'),
+            DB::raw('MIN(service_beneficiaire) as service_beneficiaire'),
+            DB::raw('MIN(demandeur_nom) as demandeur_nom'),
+            DB::raw('MIN(statut) as statut')
+        )
+        ->where('statut', 'Clôturé');
+
+    // === FILTRES ===
+    if ($request->filled('service')) {
+        $commandesQuery->where('service_beneficiaire', $request->service);
+    }
+    if ($request->filled('year')) {
+        $commandesQuery->whereYear('date_demande', $request->year);
+    }
+    if ($request->filled('month')) {
+        $commandesQuery->whereMonth('date_demande', $request->month);
+        if (!$request->filled('year')) {
+            $commandesQuery->whereYear('date_demande', date('Y'));
         }
-
-        $historique = $query->latest('date_demande')->paginate(15)->withQueryString();
-
-        $historique->getCollection()->transform(function ($demande) {
-            $demande->est_sortie_uniquement_piece = ((int)$demande->nbredemande === 0 && $demande->pieces->isNotEmpty());
-            $demande->a_des_pieces_au_total = $demande->materiel && $demande->materiel->pieces->isNotEmpty();
-            $demande->date_affichee = $demande->date_demande
-                ? \Carbon\Carbon::parse($demande->date_demande)->format('d/m/Y')
-                : '—';
-            return $demande;
+    }
+    if ($request->filled('search')) {
+        $search = $request->search;
+        if (preg_match('/^\d{2}\/\d{2}\/\d{4}$/', $search)) {
+            [$d, $m, $y] = explode('/', $search);
+            $search = "$y-$m-$d";
+        }
+        $commandesQuery->where(function ($q) use ($search) {
+            $q->where('numcomande', 'ilike', "%{$search}%")
+              ->orWhere('service_beneficiaire', 'ilike', "%{$search}%")
+              ->orWhere('demandeur_nom', 'ilike', "%{$search}%")
+              ->orWhere('date_demande', 'ilike', "%{$search}%");
         });
-
-        return Inertia::render('demandes/Historique', [
-            'historique' => $historique,
-            'services'   => Service::select('id', 'nom')->orderBy('nom')->get(),
-            'filters'    => $request->only(['search', 'year', 'month', 'service'])
-        ]);
     }
 
-    /**
-     * 10. Export PDF
-     */
-    public function exportPDF(Request $request)
-    {
-        $query = Demande::with(['pieces'])
-            ->where('statut', 'Clôturé')
-            ->orderBy('date_demande', 'desc')
-            ->orderBy('numcomande', 'desc');
+    // ── 2. Récupérer les commandes ──────────────────────────────────────
+    $commandes = $commandesQuery
+        ->groupBy('numcomande')
+        ->orderBy('date_demande', 'desc')
+        ->get();
 
-        $filters = $request->only(['service', 'year', 'month', 'search']);
-
-        if ($filters['service'] ?? null) {
-            $query->where('service_beneficiaire', $filters['service']);
-        }
-        if ($filters['year'] ?? null) {
-            $query->whereYear('date_demande', $filters['year']);
-        }
-        if ($filters['month'] ?? null) {
-            $query->whereMonth('date_demande', (int) $filters['month']);
-        }
-        if ($filters['search'] ?? null) {
-            $search = $filters['search'];
-            $query->where(function($q) use ($search) {
-                $q->where('nom_materiel', 'like', "%{$search}%")
-                  ->orWhere('numero_serie', 'like', "%{$search}%")
-                  ->orWhere('numcomande', 'like', "%{$search}%");
-            });
-        }
-
-        $count = $query->count();
-        if ($count > 1000) {
-            return back()->with('error', "Trop de données ($count lignes). Veuillez filtrer par mois.");
-        }
-
-        $demandes = $query->get();
-
-        $donnees = $demandes->groupBy([
-            fn($d) => \Carbon\Carbon::parse($d->date_demande)->format('Y-m-d'),
-            'service_beneficiaire',
-            'demandeur_nom',
-            'numcomande'
-        ], preserveKeys: true);
-
-        try {
-            $serviceLabel = $filters['service'] ?? 'Tous les services';
-            $sousTitre = "UNITÉ : " . strtoupper($serviceLabel);
-
-            if ($filters['month'] ?? null) {
-                $moisInt = (int) $filters['month'];
-                $moisFm = \Carbon\Carbon::now()->month($moisInt)->translatedFormat('F');
-                $sousTitre .= " - PÉRIODE : " . strtoupper($moisFm) . " " . ($filters['year'] ?? date('Y'));
-            }
-
-            $pdf = Pdf::loadView('pdf.historique', [
-                'donnees'   => $donnees,
-                'titre'     => "HISTORIQUE DES SORTIES MATÉRIELS",
-                'sousTitre' => $sousTitre
-            ])->setPaper('a4', 'portrait');
-
-            return $pdf->download('historique_sorties_' . date('dmY') . '.pdf');
-
-        } catch (\Exception $e) {
-            return back()->with('error', "Erreur lors de la génération : " . $e->getMessage());
-        }
+    if ($commandes->isEmpty()) {
+        return back()->with('error', "Aucune commande trouvée pour ces critères.");
     }
+
+    // ── 3. Charger TOUTES les demandes ──────────────────────────────────
+    $numCommandes = $commandes->pluck('numcomande');
+    $toutesLesDemandes = Demande::whereIn('numcomande', $numCommandes)
+        ->with(['pieces', 'materiel.pieces'])
+        ->get()
+        ->groupBy('numcomande');
+
+    // ── 4. Construire la structure $donnees avec les dates ─────────────
+    $donnees = [];
+
+    foreach ($commandes as $commande) {
+        $dateKey    = \Carbon\Carbon::parse($commande->date_demande)->format('Y-m-d');
+        $service    = $commande->service_beneficiaire;
+        $demandeur  = $commande->demandeur_nom;
+        $numcomande = $commande->numcomande;
+        $dateCommande = $commande->date_demande;
+
+        $demandes = $toutesLesDemandes->get($numcomande, collect());
+
+        if (!isset($donnees[$dateKey])) {
+            $donnees[$dateKey] = [];
+        }
+        if (!isset($donnees[$dateKey][$service])) {
+            $donnees[$dateKey][$service] = [];
+        }
+        if (!isset($donnees[$dateKey][$service][$demandeur])) {
+            $donnees[$dateKey][$service][$demandeur] = [];
+        }
+
+        $donnees[$dateKey][$service][$demandeur][$numcomande] = [
+            'demandes' => $demandes,
+            'date_commande' => $dateCommande
+        ];
+    }
+
+    // Trier par date décroissante
+    krsort($donnees);
+
+    // ── 5. Sous-titre ───────────────────────────────────────────────────
+    $serviceLabel = $request->filled('service') ? $request->service : 'Tous les services';
+    $sousTitre    = "UNITÉ : " . strtoupper($serviceLabel);
+
+    if ($request->filled('month')) {
+        $moisInt  = (int) $request->month;
+        $moisFm   = \Carbon\Carbon::now()->month($moisInt)->translatedFormat('F');
+        $annee    = $request->filled('year') ? $request->year : date('Y');
+        $sousTitre .= " — PÉRIODE : " . strtoupper($moisFm) . " $annee";
+    } elseif ($request->filled('year')) {
+        $sousTitre .= " — ANNÉE : " . $request->year;
+    } else {
+        $sousTitre .= " — HISTORIQUE COMPLET";
+    }
+
+    if ($request->filled('search')) {
+        $sousTitre .= " — RECHERCHE : " . $request->search;
+    }
+
+    // ── 6. Générer le PDF ───────────────────────────────────────────────
+    try {
+        $pdf = Pdf::loadView('pdf.historique', [
+            'donnees'   => $donnees,
+            'titre'     => "HISTORIQUE DES SORTIES MATÉRIELS",
+            'sousTitre' => $sousTitre,
+        ])->setPaper('a4', 'portrait');
+
+        $nomFichier = 'historique_sorties_'
+            . ($request->filled('service') ? Str::slug($request->service) . '_' : '')
+            . date('dmY_His')
+            . '.pdf';
+
+        return $pdf->download($nomFichier);
+
+    } catch (\Exception $e) {
+        Log::error('Erreur export PDF: ' . $e->getMessage());
+        return back()->with('error', "Erreur lors de la génération : " . $e->getMessage());
+    }
+}
 
     /**
      * 11. Suppression / Annulation
@@ -540,12 +783,12 @@ class DemandeController extends Controller
 
             Materiel::whereIn('demande_id', $demandeIds)->update([
                 'demande_id' => null,
-                'etat' => 'Disponible'
+                'etat'       => 'Disponible',
             ]);
 
             PieceMateriel::whereIn('demande_id', $demandeIds)->update([
                 'demande_id' => null,
-                'statut' => 'En Stock'
+                'statut'     => 'En Stock',
             ]);
 
             Demande::whereIn('id', $demandeIds)->delete();

@@ -34,6 +34,8 @@ Route::middleware(['auth'])->prefix('api')->group(function () {
     // AJOUT : Routes pour les statistiques des services
     Route::get('/service-stats/{serviceId}', [DashboardController::class, 'getServiceStats'])->name('api.service-stats');
     Route::get('/services-stats', [DashboardController::class, 'getAllServicesStats'])->name('api.services-stats');
+       // ⬇️⬇️⬇️ AJOUTE CETTE LIGNE ⬇️⬇️⬇️
+    Route::get('/modeles-par-service', [DashboardController::class, 'getModelesParService'])->name('api.modeles-par-service');
 });
 
 // =========================================================================

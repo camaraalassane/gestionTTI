@@ -5,7 +5,9 @@ namespace App\Http\Controllers;
 use App\Models\Materiel;
 use App\Models\PieceMateriel;
 use App\Models\Service;
+use App\Models\ModeleMateriel;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Inertia\Inertia;
 use Illuminate\Http\Request;
 
@@ -72,17 +74,15 @@ class DashboardController extends Controller
     /**
      * Récupérer les statistiques d'un service spécifique
      */
-    public function getServiceStats($serviceId)
+    public function getServiceStats(int $serviceId)
     {
         $service = Service::findOrFail($serviceId);
 
-        // Récupérer tous les matériels affectés à ce service
         $materiels = Materiel::where('service_id', $serviceId)
             ->where('etat', 'Livré')
             ->with(['modele', 'modele.categorie'])
             ->get();
 
-        // Grouper par catégorie et par modèle
         $categories = [];
         foreach ($materiels as $materiel) {
             if (!$materiel->modele) continue;
@@ -113,7 +113,6 @@ class DashboardController extends Controller
             $categories[$categorieId]['total_quantite']++;
         }
 
-        // Convertir les tableaux internes en listes
         foreach ($categories as &$categorie) {
             $categorie['modeles'] = array_values($categorie['modeles']);
         }
@@ -136,5 +135,58 @@ class DashboardController extends Controller
         }])->get();
 
         return response()->json($services);
+    }
+
+    /**
+     * Récupérer les données pour le graphique : modèles affectés par service
+     */
+    public function getModelesParService()
+    {
+        try {
+            $services = Service::whereHas('materiels', function($q) {
+                $q->where('etat', 'Livré');
+            })->orderBy('nom')->get();
+
+            $modeles = ModeleMateriel::whereHas('exemplaires', function($q) {
+                $q->where('etat', 'Livré');
+            })->orderBy('nom')->pluck('nom');
+
+            $data = DB::table('materiels')
+                ->join('modele_materiels', 'materiels.modele_materiel_id', '=', 'modele_materiels.id')
+                ->join('services', 'materiels.service_id', '=', 'services.id')
+                ->where('materiels.etat', 'Livré')
+                ->select('services.nom as service', 'modele_materiels.nom as modele', DB::raw('count(*) as total'))
+                ->groupBy('services.nom', 'modele_materiels.nom')
+                ->orderBy('services.nom')
+                ->orderBy('modele_materiels.nom')
+                ->get();
+
+            $servicesList = $services->pluck('nom')->toArray();
+            $modelesList = $modeles->toArray();
+
+            $result = [];
+            foreach ($data as $row) {
+                $result[$row->service][$row->modele] = $row->total;
+            }
+
+            $chartData = [];
+            foreach ($servicesList as $service) {
+                $row = [];
+                foreach ($modelesList as $modele) {
+                    $row[] = $result[$service][$modele] ?? 0;
+                }
+                $chartData[] = $row;
+            }
+
+            return response()->json([
+                'services' => $servicesList,
+                'modeles' => $modelesList,
+                'data' => $chartData
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Erreur getModelesParService: ' . $e->getMessage() . ' in ' . $e->getFile() . ' line ' . $e->getLine());
+            return response()->json(['error' => $e->getMessage()], 500);
+        }
     }
 }

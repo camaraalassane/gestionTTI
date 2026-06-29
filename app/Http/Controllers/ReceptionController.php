@@ -17,48 +17,95 @@ class ReceptionController extends Controller
     /**
      * Affiche la liste des CONTRATS groupés
      */
-    public function index()
+    public function index(Request $request)
     {
-        $contrats = Contrat::with(['receptions.categorie'])
+        // Récupérer tous les contrats avec leurs réceptions et catégories
+        $contrats = Contrat::with(['receptions.categorie', 'receptions.materiels.modele.categorie'])
             ->orderBy('created_at', 'desc')
             ->get();
 
         $contratsData = [];
+
         foreach ($contrats as $contrat) {
             $categories = [];
+            $dateLivraison = null;
+
             foreach ($contrat->receptions as $reception) {
+                // Récupérer la date de la première réception
+                if (!$dateLivraison && $reception->date_livraison) {
+                    $dateLivraison = $reception->date_livraison;
+                }
+
+                // Récupérer les catégories via les matériels
+                foreach ($reception->materiels as $materiel) {
+                    if ($materiel->modele && $materiel->modele->categorie) {
+                        $catName = $materiel->modele->categorie->nom;
+                        if (!in_array($catName, $categories)) {
+                            $categories[] = $catName;
+                        }
+                    }
+                }
+
+                // Alternative via la catégorie directe de la réception
                 if ($reception->categorie && !in_array($reception->categorie->nom, $categories)) {
                     $categories[] = $reception->categorie->nom;
                 }
             }
 
-            $firstReception = $contrat->receptions->first();
-
             $contratsData[] = [
                 'id' => $contrat->id,
                 'numero_contrat' => $contrat->numero_contrat,
                 'fournisseur' => $contrat->fournisseur,
-                'date_livraison' => $firstReception ? $firstReception->date_livraison : null,
+                'date_livraison' => $dateLivraison,
                 'scan_contrat' => $contrat->scan_contrat,
                 'created_at' => $contrat->created_at,
-                'all_categories' => $categories,
+                'all_categories' => array_unique($categories),
             ];
         }
 
-        $perPage = 5;
-        $currentPage = request()->get('page', 1);
-        $paginatedData = collect($contratsData)->forPage($currentPage, $perPage)->values();
+        // Pagination : 10 éléments par page
+        $perPage = 10;
+        $currentPage = $request->get('page', 1);
+
+        // Appliquer les filtres si présents
+        $query = collect($contratsData);
+
+        // Filtre par recherche
+        if ($request->filled('search')) {
+            $search = strtolower($request->search);
+            $query = $query->filter(function($item) use ($search) {
+                return str_contains(strtolower($item['numero_contrat']), $search) ||
+                       str_contains(strtolower($item['fournisseur']), $search);
+            });
+        }
+
+        // Filtre par date
+        if ($request->filled('date_debut')) {
+            $query = $query->filter(function($item) use ($request) {
+                return $item['date_livraison'] >= $request->date_debut;
+            });
+        }
+
+        if ($request->filled('date_fin')) {
+            $query = $query->filter(function($item) use ($request) {
+                return $item['date_livraison'] <= $request->date_fin;
+            });
+        }
+
+        $totalItems = $query->count();
+        $paginatedData = $query->values()->forPage($currentPage, $perPage)->values();
 
         $paginated = new \Illuminate\Pagination\LengthAwarePaginator(
             $paginatedData,
-            count($contratsData),
+            $totalItems,
             $perPage,
             $currentPage,
-            ['path' => request()->url(), 'query' => request()->query()]
+            ['path' => route('reception.index'), 'query' => $request->query()]
         );
 
         return Inertia::render('materiel/ReceptionContracts', [
             'receptions' => $paginated,
+            'filters' => $request->only(['search', 'date_debut', 'date_fin'])
         ]);
     }
 
@@ -66,27 +113,27 @@ class ReceptionController extends Controller
      * Récupère la liste des différents lots pour la traçabilité
      * Utilisé par la Modale 2 - GROUPÉ PAR DATE DE LIVRAISON
      */
-    public function getLotsJson($id)
-{
-    $results = DB::select("
-        SELECT
-            MIN(r.id) as id,
-            r.date_livraison,
-            SUM(r.unite) as quantite_recue,
-            COUNT(DISTINCT r.id) as nb_receptions
-        FROM receptions r
-        WHERE r.contrat_id = ?
-        GROUP BY r.date_livraison
-        ORDER BY r.date_livraison ASC
-    ", [$id]);
+    public function getLotsJson(int $id)
+    {
+        $results = DB::select("
+            SELECT
+                MIN(r.id) as id,
+                r.date_livraison,
+                SUM(r.unite) as quantite_recue,
+                COUNT(DISTINCT r.id) as nb_receptions
+            FROM receptions r
+            WHERE r.contrat_id = ?
+            GROUP BY r.date_livraison
+            ORDER BY r.date_livraison ASC
+        ", [$id]);
 
-    return response()->json($results);
-}
+        return response()->json($results);
+    }
 
     /**
      * Détails d'un contrat - Groupé par modèle
      */
-    public function getMaterielsJson($id)
+    public function getMaterielsJson(int $id)
     {
         $results = DB::select("
             SELECT
@@ -129,7 +176,7 @@ class ReceptionController extends Controller
     /**
      * API de vérification pour le formulaire
      */
-    public function checkContrat($numero)
+    public function checkContrat(string $numero)
     {
         $contrat = Contrat::where('numero_contrat', $numero)->first();
 
@@ -150,7 +197,7 @@ class ReceptionController extends Controller
     /**
      * Téléchargement du scan physique
      */
-    public function downloadContrat($id)
+    public function downloadContrat(int $id)
     {
         $contrat = Contrat::findOrFail($id);
 
@@ -176,7 +223,7 @@ class ReceptionController extends Controller
     /**
      * Export PDF Global (contrat complet avec TOUTES les réceptions)
      */
-    public function exportPdf($id)
+    public function exportPdf(int $id)
     {
         set_time_limit(300);
         ini_set('memory_limit', '512M');
@@ -297,7 +344,7 @@ class ReceptionController extends Controller
     /**
      * Export PDF spécifique à un lot (TOUTES les réceptions de la même date)
      */
-    public function exportPdfLot(Request $request, $lotId)
+    public function exportPdfLot(Request $request, int $lotId)
     {
         set_time_limit(300);
         ini_set('memory_limit', '512M');
