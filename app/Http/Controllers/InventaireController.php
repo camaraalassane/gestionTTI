@@ -45,119 +45,120 @@ class InventaireController extends Controller
         ]);
     }
 
-    /**
-     * Création de l'inventaire annuel
-     * - Stock : TOUS les matériels en stock (quel que soit leur année)
-     * - Sortis : UNIQUEMENT ceux clôturés dans l'année
-     */
-    public function store(Request $request)
-    {
-        $request->validate([
-            'annee' => 'required|numeric|digits:4',
-        ]);
+   /**
+ * Création de l'inventaire annuel
+ * - Stock : TOUS les matériels en stock (quel que soit leur année)
+ * - Sortis : UNIQUEMENT ceux clôturés dans l'année
+ */
+public function store(Request $request)
+{
+    $request->validate([
+        'annee' => 'required|numeric|digits:4',
+    ]);
 
-        try {
-            return DB::transaction(function () use ($request) {
+    try {
+        return DB::transaction(function () use ($request) {
 
-                $annee = (string) $request->annee;
+            $annee = (string) $request->annee;
 
-                // Vérifier si l'année est déjà clôturée
-                $existingInventaire = Inventaire::where('annee', $annee)->first();
-                if ($existingInventaire) {
-                    return back()->withErrors(['annee' => "L'année {$annee} a déjà été clôturée."]);
-                }
+            // Vérifier si l'année est déjà clôturée
+            $existingInventaire = Inventaire::where('annee', $annee)->first();
+            if ($existingInventaire) {
+                return back()->withErrors(['annee' => "L'année {$annee} a déjà été clôturée."]);
+            }
 
-                // ✅ 1. Compter TOUS les matériels en stock (MAGASIN)
-                $materielsEnStock = Materiel::whereNull('service_id')
-                    ->whereNull('demande_id')
-                    ->count();
+            // ✅ 1. Compter TOUS les matériels en stock (MAGASIN)
+            $materielsEnStock = Materiel::whereNull('service_id')
+                ->whereNull('demande_id')
+                ->count();
 
-                // ✅ 2. Compter UNIQUEMENT les sorties de l'année
-                $materielsSortisAnnee = Materiel::whereNotNull('service_id')
-                    ->whereHas('demande', function($q) use ($annee) {
-                        $q->whereYear('date_demande', $annee)
-                          ->where('statut', 'Clôturé');
-                    })
-                    ->count();
+            // ✅ 2. Compter UNIQUEMENT les sorties de l'année
+            $materielsSortisAnnee = Materiel::whereNotNull('service_id')
+                ->whereHas('demande', function($q) use ($annee) {
+                    $q->whereYear('date_demande', $annee)
+                      ->where('statut', 'Clôturé');
+                })
+                ->count();
 
-                $totalMateriels = $materielsEnStock + $materielsSortisAnnee;
+            $totalMateriels = $materielsEnStock + $materielsSortisAnnee;
 
-                if ($totalMateriels === 0) {
-                    return back()->withErrors(['annee' => 'Aucun matériel à archiver pour cette année.']);
-                }
+            if ($totalMateriels === 0) {
+                return back()->withErrors(['annee' => 'Aucun matériel à archiver pour cette année.']);
+            }
 
-                // Créer l'inventaire
-                $inventaire = Inventaire::create([
-                    'annee' => $annee,
-                    'date_cloture' => now(),
-                    'total_items' => $totalMateriels,
-                    'user_id' => Auth::id(),
+            // Créer l'inventaire
+            $inventaire = Inventaire::create([
+                'annee' => $annee,
+                'date_cloture' => now(),
+                'total_items' => $totalMateriels,
+                'user_id' => Auth::id(),
+            ]);
+
+            // ✅ 3. Insérer les matériels en STOCK (tous, sans condition d'année)
+            $queryStock = DB::table('materiels')
+                ->leftJoin('modele_materiels', 'materiels.modele_materiel_id', '=', 'modele_materiels.id')
+                ->whereNull('materiels.service_id')
+                ->whereNull('materiels.demande_id')
+                ->select([
+                    DB::raw("{$inventaire->id} as inventaire_id"),
+                    DB::raw("COALESCE(modele_materiels.nom, 'N/A') as designation"),
+                    'materiels.numero_serie',
+                    DB::raw("materiels.etat as etat_materiel"),
+                    DB::raw("'MAGASIN' as localisation"),
+                    DB::raw("NOW() as created_at"),
+                    DB::raw("NOW() as updated_at")
                 ]);
 
-                // ✅ 3. Insérer les matériels en STOCK (tous, sans condition d'année)
-                $queryStock = DB::table('materiels')
-                    ->leftJoin('modele_materiels', 'materiels.modele_materiel_id', '=', 'modele_materiels.id')
-                    ->whereNull('materiels.service_id')
-                    ->whereNull('materiels.demande_id')
-                    ->select([
-                        DB::raw("{$inventaire->id} as inventaire_id"),
-                        DB::raw("COALESCE(modele_materiels.nom, 'N/A') as designation"),
-                        'materiels.numero_serie',
-                        DB::raw("materiels.etat as etat_materiel"),
-                        DB::raw("'MAGASIN' as localisation"),
-                        DB::raw("NOW() as created_at"),
-                        DB::raw("NOW() as updated_at")
-                    ]);
+            DB::table('inventaire_details')->insertUsing(
+                ['inventaire_id', 'designation', 'numero_serie', 'etat_materiel', 'localisation', 'created_at', 'updated_at'],
+                $queryStock
+            );
 
-                DB::table('inventaire_details')->insertUsing(
-                    ['inventaire_id', 'designation', 'numero_serie', 'etat_materiel', 'localisation', 'created_at', 'updated_at'],
-                    $queryStock
-                );
+            // ✅ 4. Insérer les SORTIES de l'année uniquement - VERSION CORRIGÉE
+            // On utilise Eloquent pour la requête puis on la convertit en Query Builder
+            $querySorties = Materiel::whereNotNull('service_id')
+                ->whereHas('demande', function($q) use ($annee) {
+                    $q->whereYear('date_demande', $annee)
+                      ->where('statut', 'Clôturé');
+                })
+                ->join('modele_materiels', 'materiels.modele_materiel_id', '=', 'modele_materiels.id')
+                ->join('services', 'materiels.service_id', '=', 'services.id')
+                ->join('demandes', 'materiels.demande_id', '=', 'demandes.id')
+                ->select([
+                    DB::raw("{$inventaire->id} as inventaire_id"),
+                    DB::raw("COALESCE(modele_materiels.nom, 'N/A') as designation"),
+                    'materiels.numero_serie',
+                    DB::raw("materiels.etat as etat_materiel"),
+                    DB::raw("'SORTI' as localisation"),
+                    DB::raw("NOW() as created_at"),
+                    DB::raw("NOW() as updated_at")
+                ]);
 
-                // ✅ 4. Insérer les SORTIES de l'année uniquement
-                $querySorties = DB::table('materiels')
-                    ->leftJoin('modele_materiels', 'materiels.modele_materiel_id', '=', 'modele_materiels.id')
-                    ->leftJoin('services', 'materiels.service_id', '=', 'services.id')
-                    ->leftJoin('demandes', 'materiels.demande_id', '=', 'demandes.id')
-                    ->whereNotNull('materiels.service_id')
-                    ->whereHas('demande', function($q) use ($annee) {
-                        $q->whereYear('date_demande', $annee)
-                          ->where('statut', 'Clôturé');
-                    })
-                    ->select([
-                        DB::raw("{$inventaire->id} as inventaire_id"),
-                        DB::raw("COALESCE(modele_materiels.nom, 'N/A') as designation"),
-                        'materiels.numero_serie',
-                        DB::raw("materiels.etat as etat_materiel"),
-                        DB::raw("'SORTI' as localisation"),
-                        DB::raw("NOW() as created_at"),
-                        DB::raw("NOW() as updated_at")
-                    ]);
+            // ✅ Convertir Eloquent Builder en Query Builder pour insertUsing
+            DB::table('inventaire_details')->insertUsing(
+                ['inventaire_id', 'designation', 'numero_serie', 'etat_materiel', 'localisation', 'created_at', 'updated_at'],
+                $querySorties->toBase()
+            );
 
-                DB::table('inventaire_details')->insertUsing(
-                    ['inventaire_id', 'designation', 'numero_serie', 'etat_materiel', 'localisation', 'created_at', 'updated_at'],
-                    $querySorties
-                );
+            // Nettoyer le cache
+            Cache::forget("inventaire_{$inventaire->id}_groupes");
+            Cache::forget("inventaire_{$inventaire->id}_pdf_data");
 
-                // Nettoyer le cache
-                Cache::forget("inventaire_{$inventaire->id}_groupes");
-                Cache::forget("inventaire_{$inventaire->id}_pdf_data");
+            // Calculer les statistiques
+            $stats = $this->calculateInventoryStats($inventaire->id);
 
-                // Calculer les statistiques
-                $stats = $this->calculateInventoryStats($inventaire->id);
+            return redirect()->back()->with('success',
+                "Inventaire {$annee} archivé avec succès.\n" .
+                "Total: {$totalMateriels} matériels | " .
+                "Stock: {$stats['stock']} | Sortis: {$stats['sortis']} (uniquement {$annee})"
+            );
 
-                return redirect()->back()->with('success',
-                    "Inventaire {$annee} archivé avec succès.\n" .
-                    "Total: {$totalMateriels} matériels | " .
-                    "Stock: {$stats['stock']} | Sortis: {$stats['sortis']} (uniquement {$annee})"
-                );
-
-            });
-        } catch (\Exception $e) {
-            Log::error('Erreur inventaire store: ' . $e->getMessage());
-            return back()->withErrors(['annee' => "Erreur lors de l'archivage : " . $e->getMessage()]);
-        }
+        });
+    } catch (\Exception $e) {
+        Log::error('Erreur inventaire store: ' . $e->getMessage());
+        return back()->withErrors(['annee' => "Erreur lors de l'archivage : " . $e->getMessage()]);
     }
+}
 
     /**
      * Calculer les statistiques de l'inventaire
