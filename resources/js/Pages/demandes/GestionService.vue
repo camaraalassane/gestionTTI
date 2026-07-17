@@ -19,9 +19,18 @@ const listeDemandesRaw = computed(() => {
     );
 });
 
-// ✅ Utiliser les services actifs passés par le contrôleur
+// ✅ FIX : calculer la liste des services actifs DIRECTEMENT depuis les
+// demandes reçues, au lieu de dépendre de props.services_actifs (non fourni
+// par le contrôleur => toujours vide => chips jamais affichées => figé sur
+// un seul service).
 const servicesAvecDemandes = computed(() => {
-    return props.services_actifs || [];
+    const servicesSet = new Set();
+    listeDemandesRaw.value.forEach((d) => {
+        if (d.statut !== "Clôturé" && d.service_beneficiaire) {
+            servicesSet.add(d.service_beneficiaire);
+        }
+    });
+    return Array.from(servicesSet).sort((a, b) => a.localeCompare(b));
 });
 
 // ✅ Compter les demandes par service
@@ -88,7 +97,10 @@ const progression = computed(() =>
 );
 
 onMounted(() => {
-    // ✅ Sélectionner le premier service actif
+    // ✅ FIX : sélectionner le premier service qui a réellement des
+    // demandes en attente (servicesAvecDemandes), plutôt que de retomber
+    // systématiquement sur props.services[0] (toujours le même service
+    // alphabétiquement premier, indépendamment des demandes réelles).
     if (servicesAvecDemandes.value.length > 0) {
         serviceSelectionne.value = servicesAvecDemandes.value[0];
     } else if (props.services?.length > 0) {
