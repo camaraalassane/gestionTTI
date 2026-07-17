@@ -117,14 +117,12 @@ public function store(Request $request)
             // ✅ 4. Insérer les SORTIES de l'année uniquement - VERSION CORRIGÉE
             // On utilise Eloquent pour la requête puis on la convertit en Query Builder
             $querySorties = Materiel::whereNotNull('service_id')
-                ->whereHas('demande', function($q) use ($annee) {
-                    $q->whereYear('date_demande', $annee)
-                      ->where('statut', 'Clôturé');
-                })
-                ->join('modele_materiels', 'materiels.modele_materiel_id', '=', 'modele_materiels.id')
-                ->join('services', 'materiels.service_id', '=', 'services.id')
-                ->join('demandes', 'materiels.demande_id', '=', 'demandes.id')
-                ->select([
+    ->join('modele_materiels', 'materiels.modele_materiel_id', '=', 'modele_materiels.id')
+    ->join('services', 'materiels.service_id', '=', 'services.id')
+    ->join('demandes', 'materiels.demande_id', '=', 'demandes.id')
+    ->whereYear('demandes.date_demande', $annee)
+    ->where('demandes.statut', 'Clôturé')
+    ->select([
                     DB::raw("{$inventaire->id} as inventaire_id"),
                     DB::raw("COALESCE(modele_materiels.nom, 'N/A') as designation"),
                     'materiels.numero_serie',

@@ -7,6 +7,7 @@ const props = defineProps({
     demandes: Object,
     services: Array,
     services_actifs: Array,
+    services_totaux: Object, // ✅ NOUVEAU : totaux par service
 });
 
 const serviceSelectionne = ref(null);
@@ -19,22 +20,19 @@ const listeDemandesRaw = computed(() => {
     );
 });
 
-// ✅ FIX : calculer la liste des services actifs DIRECTEMENT depuis les
-// demandes reçues, au lieu de dépendre de props.services_actifs (non fourni
-// par le contrôleur => toujours vide => chips jamais affichées => figé sur
-// un seul service).
+// ✅ Utiliser les services actifs passés par le contrôleur
+// (plus de calcul depuis les données paginées qui ne contiennent que RM3)
 const servicesAvecDemandes = computed(() => {
-    const servicesSet = new Set();
-    listeDemandesRaw.value.forEach((d) => {
-        if (d.statut !== "Clôturé" && d.service_beneficiaire) {
-            servicesSet.add(d.service_beneficiaire);
-        }
-    });
-    return Array.from(servicesSet).sort((a, b) => a.localeCompare(b));
+    return props.services_actifs || [];
 });
 
-// ✅ Compter les demandes par service
+// ✅ Compter les demandes par service (utilisation des totaux réels)
 const getNbDemandesParService = (service) => {
+    // Utiliser les totaux passés par le contrôleur
+    if (props.services_totaux && props.services_totaux[service] !== undefined) {
+        return props.services_totaux[service];
+    }
+    // Fallback : compter dans la liste paginée
     return listeDemandesRaw.value.filter(
         (d) => d.service_beneficiaire === service && d.statut !== "Clôturé"
     ).length;
@@ -97,10 +95,7 @@ const progression = computed(() =>
 );
 
 onMounted(() => {
-    // ✅ FIX : sélectionner le premier service qui a réellement des
-    // demandes en attente (servicesAvecDemandes), plutôt que de retomber
-    // systématiquement sur props.services[0] (toujours le même service
-    // alphabétiquement premier, indépendamment des demandes réelles).
+    // ✅ Sélectionner le premier service actif
     if (servicesAvecDemandes.value.length > 0) {
         serviceSelectionne.value = servicesAvecDemandes.value[0];
     } else if (props.services?.length > 0) {
@@ -152,7 +147,7 @@ const supprimerLigne = (item) => {
                             label="Service en cours de traitement" variant="solo" flat hide-details
                             prepend-inner-icon="mdi-office-building" color="teal-darken-1"></v-autocomplete>
 
-                        <!-- ✅ AFFICHER TOUS LES SERVICES ACTIFS AVEC LE NOMBRE -->
+                        <!-- ✅ AFFICHER TOUS LES SERVICES ACTIFS AVEC LE NOMBRE RÉEL -->
                         <div v-if="servicesAvecDemandes && servicesAvecDemandes.length > 0"
                             class="px-4 py-3 d-flex align-center flex-wrap ga-2 border-t mt-2">
                             <span class="text-caption font-weight-bold text-teal-darken-2 text-uppercase"
@@ -293,7 +288,7 @@ const supprimerLigne = (item) => {
                                                             <v-icon size="12" color="teal-darken-3"
                                                                 class="mr-1">mdi-plus-circle</v-icon>
                                                             <span class="text-caption text-teal-darken-3">{{ p.nom_piece
-                                                            }}</span>
+                                                                }}</span>
                                                         </div>
                                                     </div>
 
@@ -382,8 +377,8 @@ const supprimerLigne = (item) => {
                                             <!-- Colonne État -->
                                             <td class="text-center">
                                                 <v-chip :color="item.statut === 'Validé'
-                                                    ? 'success'
-                                                    : 'amber-darken-2'
+                                                        ? 'success'
+                                                        : 'amber-darken-2'
                                                     " size="x-small" variant="tonal" class="font-weight-bold">
                                                     <v-icon start size="12">
                                                         {{
@@ -444,13 +439,13 @@ const supprimerLigne = (item) => {
                                     <span class="text-caption text-teal-darken-3">Articles :</span>
                                     <span class="font-weight-bold">{{
                                         totalArticles
-                                    }}</span>
+                                        }}</span>
                                 </div>
                                 <div class="d-flex justify-space-between">
                                     <span class="text-caption text-teal-darken-3">Validés :</span>
                                     <span class="font-weight-bold text-success">{{
                                         nbValides
-                                    }}</span>
+                                        }}</span>
                                 </div>
                             </div>
                             <v-btn block color="teal-lighten-4" variant="flat"
@@ -486,7 +481,6 @@ tr {
     border: 1px solid #e2e8f0;
 }
 
-/* Supprime l'espace blanc sur les côtés du tableau */
 :deep(.v-table > .v-table__wrapper > table) {
     width: 100%;
     border-spacing: 0;
