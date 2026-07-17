@@ -282,70 +282,74 @@ class DemandeController extends Controller
         }
     }
 
-    /**
-     * 5. Gestion par Service - CORRIGÉ
-     */
-    public function gestionService(Request $request)
-    {
-        $query = Demande::where('statut', '!=', 'Clôturé')
-            ->with(['pieces:id,demande_id,nom_piece,numero_serie', 'materiel.pieces'])
-            ->select(
-                'id', 'materiel_id', 'nom_materiel', 'numero_serie',
-                'service_beneficiaire', 'statut', 'nbredemande',
-                'demandeur_nom', 'description', 'date_demande'
-            )
-            ->latest();
+   /**
+ * 5. Gestion par Service - TOUTES LES DEMANDES SANS PAGINATION
+ */
+public function gestionService(Request $request)
+{
+    $query = Demande::where('statut', '!=', 'Clôturé')
+        ->with(['pieces:id,demande_id,nom_piece,numero_serie', 'materiel.pieces'])
+        ->select(
+            'id', 'materiel_id', 'nom_materiel', 'numero_serie',
+            'service_beneficiaire', 'statut', 'nbredemande',
+            'demandeur_nom', 'description', 'date_demande'
+        )
+        // ✅ Trier par service d'abord pour avoir tous les services
+        ->orderBy('service_beneficiaire', 'asc')
+        ->orderBy('date_demande', 'desc');
 
-        if ($request->filled('service')) {
-            $query->where('service_beneficiaire', $request->service);
-        }
-
-        if ($request->filled('statut')) {
-            $query->where('statut', $request->statut);
-        }
-
-        $demandes = $query->paginate(50)->withQueryString();
-
-        $demandes->getCollection()->transform(function ($demande) {
-            $demande->est_uniquement_piece    = (int)$demande->nbredemande == 0;
-            $demande->a_des_pieces_au_total   = $demande->materiel && $demande->materiel->pieces->isNotEmpty();
-            $demande->date_affichee           = $demande->date_demande
-                ? \Carbon\Carbon::parse($demande->date_demande)->format('d/m/Y')
-                : 'N/A';
-            return $demande;
-        });
-
-        // ✅ Récupérer TOUS les services avec demandes (indépendamment de la pagination)
-        $servicesAvecDemandes = Demande::where('statut', '!=', 'Clôturé')
-            ->whereNotNull('service_beneficiaire')
-            ->distinct()
-            ->pluck('service_beneficiaire')
-            ->filter()
-            ->values()
-            ->toArray();
-
-        // ✅ Récupérer les totaux par service
-        $servicesTotaux = Demande::where('statut', '!=', 'Clôturé')
-            ->whereNotNull('service_beneficiaire')
-            ->select('service_beneficiaire', DB::raw('COUNT(*) as total'))
-            ->groupBy('service_beneficiaire')
-            ->get()
-            ->mapWithKeys(function ($item) {
-                return [$item->service_beneficiaire => $item->total];
-            })
-            ->toArray();
-
-        // ✅ Récupérer TOUS les services
-        $tousLesServices = Service::select('id', 'nom')->orderBy('nom')->get();
-
-        return Inertia::render('demandes/GestionService', [
-            'demandes' => $demandes,
-            'services' => $tousLesServices,
-            'services_actifs' => $servicesAvecDemandes,
-            'services_totaux' => $servicesTotaux,
-            'filters'  => $request->only(['service', 'statut']),
-        ]);
+    if ($request->filled('service')) {
+        $query->where('service_beneficiaire', $request->service);
     }
+
+    if ($request->filled('statut')) {
+        $query->where('statut', $request->statut);
+    }
+
+    // ✅ Récupérer TOUTES les demandes (pas de pagination)
+    $demandes = $query->get();
+
+    // Transformer les données
+    $demandes->transform(function ($demande) {
+        $demande->est_uniquement_piece    = (int)$demande->nbredemande == 0;
+        $demande->a_des_pieces_au_total   = $demande->materiel && $demande->materiel->pieces->isNotEmpty();
+        $demande->date_affichee           = $demande->date_demande
+            ? \Carbon\Carbon::parse($demande->date_demande)->format('d/m/Y')
+            : 'N/A';
+        return $demande;
+    });
+
+    // ✅ Récupérer TOUS les services avec demandes (indépendamment de la pagination)
+    $servicesAvecDemandes = Demande::where('statut', '!=', 'Clôturé')
+        ->whereNotNull('service_beneficiaire')
+        ->distinct()
+        ->pluck('service_beneficiaire')
+        ->filter()
+        ->values()
+        ->toArray();
+
+    // ✅ Récupérer les totaux par service
+    $servicesTotaux = Demande::where('statut', '!=', 'Clôturé')
+        ->whereNotNull('service_beneficiaire')
+        ->select('service_beneficiaire', DB::raw('COUNT(*) as total'))
+        ->groupBy('service_beneficiaire')
+        ->get()
+        ->mapWithKeys(function ($item) {
+            return [$item->service_beneficiaire => $item->total];
+        })
+        ->toArray();
+
+    // ✅ Récupérer TOUS les services
+    $tousLesServices = Service::select('id', 'nom')->orderBy('nom')->get();
+
+    return Inertia::render('demandes/GestionService', [
+        'demandes' => $demandes,
+        'services' => $tousLesServices,
+        'services_actifs' => $servicesAvecDemandes,
+        'services_totaux' => $servicesTotaux,
+        'filters'  => $request->only(['service', 'statut']),
+    ]);
+}
 
     /**
      * 6. Clôturer / Archiver - AVEC DÉDUCTION STOCK SUR LES RÉCEPTIONS
