@@ -1,8 +1,7 @@
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount } from "vue";
+import { ref, computed, onMounted } from "vue";
 import { Head, router } from "@inertiajs/vue3";
 import AuthentDemandeLayout from "@/Layouts/AuthentDemandeLayout.vue";
-import { useInfiniteScroll } from "@/composables/useInfiniteScroll";
 
 const props = defineProps({
     demandes: Object,
@@ -115,12 +114,6 @@ onMounted(() => {
     setupObserver();
 });
 
-onBeforeUnmount(() => {
-    if (observer.value) {
-        observer.value.disconnect();
-    }
-});
-
 // --- ACTIONS PAR DEMANDEUR ---
 const validerParDemandeur = (articles) => {
     router.post(
@@ -195,13 +188,13 @@ const supprimerLigne = (item) => {
     <Head title="Distribution" />
     <AuthentDemandeLayout>
         <v-container fluid class="pa-6 bg-teal-lighten-5 min-vh-100">
+            <!-- ROW FIXE : SELECTEUR ET CHIPS -->
             <v-row justify="center" class="mb-8">
                 <v-col cols="12" md="10" lg="8">
                     <v-card class="rounded-xl pa-2" elevation="2" border>
                         <v-autocomplete v-model="serviceSelectionne" :items="services" item-title="nom" item-value="nom"
                             label="Service en cours de traitement" variant="solo" flat hide-details
-                            prepend-inner-icon="mdi-office-building" color="teal-darken-1">
-                        </v-autocomplete>
+                            prepend-inner-icon="mdi-office-building" color="teal-darken-1"></v-autocomplete>
 
                         <div v-if="servicesAvecDemandes && servicesAvecDemandes.length > 0"
                             class="px-4 py-3 d-flex align-center flex-wrap ga-2 border-t mt-2">
@@ -220,7 +213,6 @@ const supprimerLigne = (item) => {
                                 </v-badge>
                             </v-chip>
                         </div>
-
                         <div v-else class="px-4 py-3 text-caption text-grey">
                             Aucune demande en attente.
                         </div>
@@ -228,235 +220,245 @@ const supprimerLigne = (item) => {
                 </v-col>
             </v-row>
 
-            <div v-if="serviceSelectionne">
-                <v-row>
-                    <v-col cols="12" lg="9">
-                        <div v-if="demandesDuService.length === 0" class="text-center pa-10 bg-white rounded-xl">
-                            <v-icon size="64" color="grey-lighten-2">mdi-inbox-outline</v-icon>
-                            <div class="text-h6 text-grey mt-4">
-                                Aucune demande pour ce service
-                            </div>
-                            <v-btn color="teal-darken-1" class="mt-4" prepend-icon="mdi-plus"
-                                @click="allerAjouterArticle">
-                                Ajouter une demande
-                            </v-btn>
+            <!-- ROW FIXE : CONTENU PRINCIPAL AVEC SCROLL -->
+            <div v-if="serviceSelectionne" class="d-flex">
+                <!-- COLONNE GAUCHE : LISTE DES DEMANDES (FIXE + SCROLL) -->
+                <v-col cols="12" lg="9" class="pa-0 pr-3">
+                    <!-- CARTE FIXE POUR LE CONTENU -->
+                    <v-card class="rounded-xl border shadow-sm overflow-hidden" elevation="0"
+                        style="height: calc(100vh - 280px);">
+                        <!-- HEADER FIXE -->
+                        <div class="bg-teal-darken-1 pa-3 d-flex align-center" style="min-height: 52px;">
+                            <v-icon color="white" class="mr-2">mdi-format-list-bulleted</v-icon>
+                            <span class="text-white font-weight-bold text-uppercase" style="letter-spacing: 0.5px">
+                                Demandes du service {{ serviceSelectionne }}
+                            </span>
+                            <v-spacer></v-spacer>
+                            <v-chip size="x-small" color="white" variant="flat"
+                                class="text-teal-darken-1 font-weight-black">
+                                {{ totalArticles }} Article(s)
+                            </v-chip>
                         </div>
 
-                        <!-- LISTE AVEC SCROLL INFINI -->
-                        <div v-for="(articles, nom) in demandesGroupeesParDemandeur" :key="nom" class="mb-6">
-                            <v-card class="rounded-xl border shadow-sm overflow-hidden mb-6" elevation="0">
-                                <div class="bg-teal-darken-1 pa-4 d-flex align-center">
-                                    <v-icon color="white" class="mr-2">mdi-account-circle</v-icon>
-                                    <span class="text-white font-weight-bold text-uppercase"
+                        <!-- ZONE DE SCROLL -->
+                        <div style="height: calc(100% - 52px); overflow-y: auto; overflow-x: hidden;"
+                            class="scrollable-area">
+                            <!-- Message si aucune demande -->
+                            <div v-if="demandesDuService.length === 0" class="text-center pa-10">
+                                <v-icon size="64" color="grey-lighten-2">mdi-inbox-outline</v-icon>
+                                <div class="text-h6 text-grey mt-4">
+                                    Aucune demande pour ce service
+                                </div>
+                                <v-btn color="teal-darken-1" class="mt-4" prepend-icon="mdi-plus"
+                                    @click="allerAjouterArticle">
+                                    Ajouter une demande
+                                </v-btn>
+                            </div>
+
+                            <!-- LISTE DES DEMANDES -->
+                            <div v-for="(articles, nom) in demandesGroupeesParDemandeur" :key="nom" class="pa-3">
+                                <div class="d-flex align-center mb-3">
+                                    <v-icon color="teal-darken-1" class="mr-2">mdi-account-circle</v-icon>
+                                    <span class="font-weight-bold text-teal-darken-3 text-uppercase"
                                         style="letter-spacing: 0.5px">
                                         Receveur : {{ nom }}
                                     </span>
-                                    <v-spacer></v-spacer>
-                                    <v-chip size="x-small" color="white" variant="flat"
-                                        class="text-teal-darken-1 font-weight-black">
+                                    <v-chip size="x-small" color="teal-lighten-3" class="ml-2 font-weight-black">
                                         {{ articles.length }} Article(s)
                                     </v-chip>
                                 </div>
 
-                                <!-- CONTENEUR AVEC SCROLL -->
-                                <div class="table-container" style="max-height: 400px; overflow-y: auto;">
-                                    <v-table hover density="comfortable" style="background: transparent !important">
-                                        <thead>
-                                            <tr class="bg-teal-lighten-5"
-                                                style="position: sticky; top: 0; z-index: 10;">
-                                                <th class="text-teal-darken-3 font-weight-bold text-left"
-                                                    style="border-top-left-radius: 0 !important; border-bottom: none !important;">
-                                                    Désignation
-                                                </th>
-                                                <th class="text-teal-darken-3 font-weight-bold text-center"
-                                                    style="border-bottom: none !important;">
-                                                    S/N
-                                                </th>
-                                                <th class="text-teal-darken-3 font-weight-bold text-center"
-                                                    style="border-bottom: none !important;">
-                                                    Qté
-                                                </th>
-                                                <th class="text-teal-darken-3 font-weight-bold text-center"
-                                                    style="border-bottom: none !important;">
-                                                    État
-                                                </th>
-                                                <th class="text-teal-darken-3 font-weight-bold text-right"
-                                                    style="border-top-right-radius: 0 !important; border-bottom: none !important;">
-                                                    Actions
-                                                </th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            <tr v-for="item in articles" :key="item.id">
-                                                <td class="pa-2">
-                                                    <template
-                                                        v-if="item.nbredemande === 0 && item.pieces && item.pieces.length > 0">
-                                                        <div v-for="(piece, pIdx) in item.pieces" :key="piece.id"
-                                                            class="d-flex align-center" :class="{ 'mt-2': pIdx > 0 }">
-                                                            <v-icon color="orange-darken-2" size="small"
-                                                                class="mr-2">mdi-puzzle</v-icon>
-                                                            <div class="font-weight-black text-uppercase text-orange-darken-4"
-                                                                style="font-size: 0.9rem">
-                                                                {{ piece.nom_piece }}
-                                                            </div>
+                                <v-table hover density="comfortable" style="background: transparent !important">
+                                    <thead>
+                                        <tr class="bg-teal-lighten-5" style="position: sticky; top: 0; z-index: 10;">
+                                            <th class="text-teal-darken-3 font-weight-bold text-left"
+                                                style="border-top-left-radius: 0 !important; border-bottom: none !important;">
+                                                Désignation
+                                            </th>
+                                            <th class="text-teal-darken-3 font-weight-bold text-center"
+                                                style="border-bottom: none !important;">
+                                                S/N
+                                            </th>
+                                            <th class="text-teal-darken-3 font-weight-bold text-center"
+                                                style="border-bottom: none !important;">
+                                                Qté
+                                            </th>
+                                            <th class="text-teal-darken-3 font-weight-bold text-center"
+                                                style="border-bottom: none !important;">
+                                                État
+                                            </th>
+                                            <th class="text-teal-darken-3 font-weight-bold text-right"
+                                                style="border-top-right-radius: 0 !important; border-bottom: none !important;">
+                                                Actions
+                                            </th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr v-for="item in articles" :key="item.id">
+                                            <td class="pa-2">
+                                                <!-- Cas 1 : Pièces seules -->
+                                                <template
+                                                    v-if="item.nbredemande === 0 && item.pieces && item.pieces.length > 0">
+                                                    <div v-for="(piece, pIdx) in item.pieces" :key="piece.id"
+                                                        class="d-flex align-center" :class="{ 'mt-2': pIdx > 0 }">
+                                                        <v-icon color="orange-darken-2" size="small"
+                                                            class="mr-2">mdi-puzzle</v-icon>
+                                                        <div class="font-weight-black text-uppercase text-orange-darken-4"
+                                                            style="font-size: 0.9rem">
+                                                            {{ piece.nom_piece }}
                                                         </div>
-                                                        <div class="text-caption italic ml-7 mt-1" style="color: #888">
-                                                            Origine : {{ item.nom_materiel }}
-                                                            <span v-if="item.numero_serie">(S/N : {{ item.numero_serie
+                                                    </div>
+                                                    <div class="text-caption italic ml-7 mt-1" style="color: #888">
+                                                        Origine : {{ item.nom_materiel }}
+                                                        <span v-if="item.numero_serie">(S/N : {{ item.numero_serie
                                                             }})</span>
-                                                        </div>
-                                                    </template>
+                                                    </div>
+                                                </template>
 
-                                                    <template v-else>
-                                                        <div class="d-flex align-center">
-                                                            <v-icon color="teal-darken-2" size="small"
-                                                                class="mr-2">mdi-monitor</v-icon>
-                                                            <div class="font-weight-black text-uppercase"
-                                                                style="font-size: 0.9rem">
-                                                                {{ item.nom_materiel }}
-                                                            </div>
+                                                <!-- Cas 2 : Matériel avec ou sans pièces -->
+                                                <template v-else>
+                                                    <div class="d-flex align-center">
+                                                        <v-icon color="teal-darken-2" size="small"
+                                                            class="mr-2">mdi-monitor</v-icon>
+                                                        <div class="font-weight-black text-uppercase"
+                                                            style="font-size: 0.9rem">
+                                                            {{ item.nom_materiel }}
                                                         </div>
-                                                        <div v-if="item.pieces && item.pieces.length > 0" class="mt-2">
-                                                            <div v-for="(p, idx) in item.pieces" :key="p.id"
-                                                                class="d-flex align-center ml-7">
-                                                                <v-icon size="12" color="teal-darken-3"
-                                                                    class="mr-1">mdi-plus-circle</v-icon>
-                                                                <span class="text-caption text-teal-darken-3">{{
-                                                                    p.nom_piece }}</span>
-                                                            </div>
+                                                    </div>
+                                                    <div v-if="item.pieces && item.pieces.length > 0" class="mt-2">
+                                                        <div v-for="(p, idx) in item.pieces" :key="p.id"
+                                                            class="d-flex align-center ml-7">
+                                                            <v-icon size="12" color="teal-darken-3"
+                                                                class="mr-1">mdi-plus-circle</v-icon>
+                                                            <span class="text-caption text-teal-darken-3">{{ p.nom_piece
+                                                                }}</span>
                                                         </div>
-                                                        <div v-else class="text-caption italic ml-7"
-                                                            style="color: #666">
-                                                            (Matériel complet sans pièces détachées)
-                                                        </div>
-                                                    </template>
-                                                </td>
+                                                    </div>
+                                                    <div v-else class="text-caption italic ml-7" style="color: #666">
+                                                        (Matériel complet sans pièces détachées)
+                                                    </div>
+                                                </template>
+                                            </td>
 
-                                                <td class="text-center font-mono font-weight-bold">
-                                                    <template
-                                                        v-if="item.nbredemande === 0 && item.pieces && item.pieces.length > 0">
-                                                        <div v-for="piece in item.pieces" :key="'sn-' + piece.id"
-                                                            class="py-1 text-orange-darken-3">
-                                                            {{ piece.numero_serie || "—" }}
-                                                        </div>
-                                                        <div class="py-1 invisible">—</div>
-                                                    </template>
-
-                                                    <template v-else-if="item.pieces && item.pieces.length > 0">
-                                                        <div class="py-1 font-weight-bold">
-                                                            {{ item.numero_serie || "—" }}
-                                                        </div>
-                                                        <div v-for="piece in item.pieces" :key="'sn-' + piece.id"
-                                                            class="py-1 text-teal-darken-3">
-                                                            {{ piece.numero_serie || "—" }}
-                                                        </div>
-                                                    </template>
-
-                                                    <template v-else>
+                                            <td class="text-center font-mono font-weight-bold">
+                                                <template
+                                                    v-if="item.nbredemande === 0 && item.pieces && item.pieces.length > 0">
+                                                    <div v-for="piece in item.pieces" :key="'sn-' + piece.id"
+                                                        class="py-1 text-orange-darken-3">
+                                                        {{ piece.numero_serie || "—" }}
+                                                    </div>
+                                                    <div class="py-1 invisible">—</div>
+                                                </template>
+                                                <template v-else-if="item.pieces && item.pieces.length > 0">
+                                                    <div class="py-1 font-weight-bold">
                                                         {{ item.numero_serie || "—" }}
-                                                    </template>
-                                                </td>
+                                                    </div>
+                                                    <div v-for="piece in item.pieces" :key="'sn-' + piece.id"
+                                                        class="py-1 text-teal-darken-3">
+                                                        {{ piece.numero_serie || "—" }}
+                                                    </div>
+                                                </template>
+                                                <template v-else>
+                                                    {{ item.numero_serie || "—" }}
+                                                </template>
+                                            </td>
 
-                                                <td class="text-center font-weight-black">
-                                                    <template
-                                                        v-if="item.nbredemande === 0 && item.pieces && item.pieces.length > 0">
-                                                        <div v-for="piece in item.pieces" :key="'qty-' + piece.id"
-                                                            class="py-1">
-                                                            1
-                                                        </div>
-                                                        <div class="py-1 invisible">—</div>
-                                                    </template>
+                                            <td class="text-center font-weight-black">
+                                                <template
+                                                    v-if="item.nbredemande === 0 && item.pieces && item.pieces.length > 0">
+                                                    <div v-for="piece in item.pieces" :key="'qty-' + piece.id"
+                                                        class="py-1">
+                                                        1
+                                                    </div>
+                                                    <div class="py-1 invisible">—</div>
+                                                </template>
+                                                <template v-else-if="item.pieces && item.pieces.length > 0">
+                                                    <div class="py-1">{{ item.nbredemande }}</div>
+                                                    <div v-for="piece in item.pieces" :key="'qty-' + piece.id"
+                                                        class="py-1">
+                                                        1
+                                                    </div>
+                                                </template>
+                                                <template v-else>
+                                                    {{ item.nbredemande }}
+                                                </template>
+                                            </td>
 
-                                                    <template v-else-if="item.pieces && item.pieces.length > 0">
-                                                        <div class="py-1">{{ item.nbredemande }}</div>
-                                                        <div v-for="piece in item.pieces" :key="'qty-' + piece.id"
-                                                            class="py-1">
-                                                            1
-                                                        </div>
-                                                    </template>
+                                            <td class="text-center">
+                                                <v-chip :color="item.statut === 'Validé' ? 'success' : 'amber-darken-2'"
+                                                    size="x-small" variant="tonal" class="font-weight-bold">
+                                                    <v-icon start size="12">
+                                                        {{ item.statut === "Validé" ? "mdi-check-circle" :
+                                                        "mdi-clock-outline" }}
+                                                    </v-icon>
+                                                    {{ item.statut }}
+                                                </v-chip>
+                                            </td>
 
-                                                    <template v-else>
-                                                        {{ item.nbredemande }}
-                                                    </template>
-                                                </td>
+                                            <td class="text-right">
+                                                <v-btn icon="mdi-trash-can-outline" size="x-small" variant="text"
+                                                    color="red-lighten-3" @click="supprimerLigne(item)"></v-btn>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </v-table>
 
-                                                <td class="text-center">
-                                                    <v-chip
-                                                        :color="item.statut === 'Validé' ? 'success' : 'amber-darken-2'"
-                                                        size="x-small" variant="tonal" class="font-weight-bold">
-                                                        <v-icon start size="12">
-                                                            {{ item.statut === "Validé" ? "mdi-check-circle" :
-                                                                "mdi-clock-outline" }}
-                                                        </v-icon>
-                                                        {{ item.statut }}
-                                                    </v-chip>
-                                                </td>
-
-                                                <td class="text-right">
-                                                    <v-btn icon="mdi-trash-can-outline" size="x-small" variant="text"
-                                                        color="red-lighten-3" @click="supprimerLigne(item)"></v-btn>
-                                                </td>
-                                            </tr>
-                                        </tbody>
-                                    </v-table>
-                                </div>
-
-                                <v-divider></v-divider>
-
-                                <div class="pa-3 bg-white d-flex justify-end ga-2">
+                                <!-- BOUTONS PAR GROUPE -->
+                                <div class="d-flex justify-end ga-2 mt-3">
                                     <v-btn v-if="!estGroupeValide(articles)" color="teal-darken-1"
                                         class="rounded-lg text-none font-weight-bold shadow-sm"
                                         prepend-icon="mdi-check-all" @click="validerParDemandeur(articles)">
                                         Valider la demande
                                     </v-btn>
-
                                     <v-btn v-else color="teal-darken-2" class="rounded-lg text-none font-weight-bold"
                                         prepend-icon="mdi-printer"
                                         @click="imprimerEtCloturerParDemandeur(nom, articles)">
                                         Imprimer & Clôturer
                                     </v-btn>
                                 </div>
-                            </v-card>
-                        </div>
 
-                        <!-- LOADER -->
-                        <div ref="loadMoreRef" class="text-center py-4">
-                            <v-progress-circular v-if="isLoading" indeterminate color="teal-darken-1"
-                                size="40"></v-progress-circular>
-                            <span v-else-if="hasMore" class="text-caption text-grey">Scroll pour charger plus...</span>
-                            <span v-else class="text-caption text-grey">Toutes les demandes sont chargées</span>
-                        </div>
-                    </v-col>
+                                <v-divider class="my-3"></v-divider>
+                            </div>
 
-                    <!-- COLONNE DE DROITE : STATISTIQUES -->
-                    <v-col cols="12" lg="3">
-                        <v-card class="rounded-xl pa-5 sticky-card border bg-white shadow-sm" elevation="0">
-                            <div class="text-overline text-teal-lighten-1">
-                                Service
+                            <!-- LOADER -->
+                            <div ref="loadMoreRef" class="text-center py-3">
+                                <v-progress-circular v-if="isLoading" indeterminate color="teal-darken-1"
+                                    size="32"></v-progress-circular>
+                                <span v-else-if="hasMore" class="text-caption text-grey">⬇ Scroll pour charger
+                                    plus...</span>
+                                <span v-else class="text-caption text-grey">✓ Toutes les demandes sont chargées</span>
                             </div>
-                            <div class="text-h6 font-weight-black text-teal-darken-4 mb-4 leading-tight">
-                                {{ serviceSelectionne }}
+                        </div>
+                    </v-card>
+                </v-col>
+
+                <!-- COLONNE DROITE : STATISTIQUES (FIXE) -->
+                <v-col cols="12" lg="3" class="pa-0 pl-3">
+                    <v-card class="rounded-xl pa-5 sticky-card border bg-white shadow-sm" elevation="0"
+                        style="position: sticky; top: 24px;">
+                        <div class="text-overline text-teal-lighten-1">Service</div>
+                        <div class="text-h6 font-weight-black text-teal-darken-4 mb-4 leading-tight">
+                            {{ serviceSelectionne }}
+                        </div>
+                        <v-progress-linear :model-value="progression" color="teal-lighten-2" height="8" rounded
+                            class="mb-6"></v-progress-linear>
+                        <div class="bg-teal-lighten-5 pa-3 rounded-lg mb-4">
+                            <div class="d-flex justify-space-between mb-1">
+                                <span class="text-caption text-teal-darken-3">Articles :</span>
+                                <span class="font-weight-bold">{{ totalArticles }}</span>
                             </div>
-                            <v-progress-linear :model-value="progression" color="teal-lighten-2" height="8" rounded
-                                class="mb-6"></v-progress-linear>
-                            <div class="bg-teal-lighten-5 pa-3 rounded-lg mb-4">
-                                <div class="d-flex justify-space-between mb-1">
-                                    <span class="text-caption text-teal-darken-3">Articles :</span>
-                                    <span class="font-weight-bold">{{ totalArticles }}</span>
-                                </div>
-                                <div class="d-flex justify-space-between">
-                                    <span class="text-caption text-teal-darken-3">Validés :</span>
-                                    <span class="font-weight-bold text-success">{{ nbValides }}</span>
-                                </div>
+                            <div class="d-flex justify-space-between">
+                                <span class="text-caption text-teal-darken-3">Validés :</span>
+                                <span class="font-weight-bold text-success">{{ nbValides }}</span>
                             </div>
-                            <v-btn block color="teal-lighten-4" variant="flat"
-                                class="text-teal-darken-3 rounded-lg text-none font-weight-bold" prepend-icon="mdi-plus"
-                                @click="allerAjouterArticle">
-                                Ajouter un article
-                            </v-btn>
-                        </v-card>
-                    </v-col>
-                </v-row>
+                        </div>
+                        <v-btn block color="teal-lighten-4" variant="flat"
+                            class="text-teal-darken-3 rounded-lg text-none font-weight-bold" prepend-icon="mdi-plus"
+                            @click="allerAjouterArticle">
+                            Ajouter un article
+                        </v-btn>
+                    </v-card>
+                </v-col>
             </div>
         </v-container>
     </AuthentDemandeLayout>
@@ -468,29 +470,38 @@ const supprimerLigne = (item) => {
     top: 24px;
 }
 
-.table-container {
-    max-height: 400px;
-    overflow-y: auto;
+/* ===== SCROLL PERSONNALISÉ ===== */
+.scrollable-area {
+    scroll-behavior: smooth;
 }
 
-.table-container::-webkit-scrollbar {
-    width: 8px;
+.scrollable-area::-webkit-scrollbar {
+    width: 6px;
 }
 
-.table-container::-webkit-scrollbar-track {
-    background: #f1f1f1;
-    border-radius: 4px;
+.scrollable-area::-webkit-scrollbar-track {
+    background: #e0f2f1;
+    border-radius: 3px;
 }
 
-.table-container::-webkit-scrollbar-thumb {
+.scrollable-area::-webkit-scrollbar-thumb {
     background: #26a69a;
-    border-radius: 4px;
+    border-radius: 3px;
 }
 
-.table-container::-webkit-scrollbar-thumb:hover {
+.scrollable-area::-webkit-scrollbar-thumb:hover {
     background: #1a6d5e;
 }
 
+/* ===== STICKY HEADER DU TABLEAU ===== */
+.v-table thead tr th {
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 10 !important;
+    background: #e0f2f1 !important;
+}
+
+/* ===== AUTRES STYLES ===== */
 tr {
     page-break-inside: avoid;
 }
