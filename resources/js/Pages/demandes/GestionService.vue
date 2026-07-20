@@ -1,33 +1,25 @@
 <script setup>
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, watch } from "vue";
 import { Head, router } from "@inertiajs/vue3";
 import AuthentDemandeLayout from "@/Layouts/AuthentDemandeLayout.vue";
 
 const props = defineProps({
-    demandes: Object,
+    demandes: Array,
     services: Array,
     services_actifs: Array,
     services_totaux: Object,
 });
 
 const serviceSelectionne = ref(null);
-const perPage = 15;
-const currentPage = ref(1);
-const allDemandes = ref([]);
-const isLoading = ref(false);
-const hasMore = ref(true);
 
 // --- LOGIQUE DE DONNÉES ---
-const listeDemandesRaw = computed(() => {
-    return allDemandes.value;
-});
+// ✅ Le contrôleur renvoie déjà TOUTES les demandes non-clôturées (pas de pagination)
+const listeDemandesRaw = computed(() => props.demandes || []);
 
-// ✅ Utiliser les services actifs passés par le contrôleur
 const servicesAvecDemandes = computed(() => {
     return props.services_actifs || [];
 });
 
-// ✅ Compter les demandes par service
 const getNbDemandesParService = (service) => {
     if (props.services_totaux && props.services_totaux[service] !== undefined) {
         return props.services_totaux[service];
@@ -37,6 +29,7 @@ const getNbDemandesParService = (service) => {
     ).length;
 };
 
+// ✅ Filtrage côté front puisque toutes les données sont déjà chargées
 const demandesDuService = computed(() => {
     if (!serviceSelectionne.value) return [];
     return listeDemandesRaw.value.filter(
@@ -56,62 +49,12 @@ const demandesGroupeesParDemandeur = computed(() => {
     return groupes;
 });
 
-// --- CHARGEMENT PAGINÉ ---
-const loadMore = async () => {
-    if (isLoading.value || !hasMore.value) return;
-
-    isLoading.value = true;
-
-    try {
-        const response = await axios.get(route("demandes.gestionService"), {
-            params: {
-                page: currentPage.value,
-                per_page: perPage,
-                service: serviceSelectionne.value,
-                statut: "En attente",
-            },
-        });
-
-        const newData = response.data.data || [];
-        allDemandes.value = [...allDemandes.value, ...newData];
-
-        hasMore.value = response.data.next_page_url !== null;
-        currentPage.value++;
-    } catch (error) {
-        console.error("Erreur de chargement:", error);
-    } finally {
-        isLoading.value = false;
-    }
-};
-
-// --- INFINITE SCROLL ---
-const observer = ref(null);
-const loadMoreRef = ref(null);
-
-const setupObserver = () => {
-    const options = {
-        root: null,
-        rootMargin: "0px 0px 100px 0px",
-        threshold: 0.1,
-    };
-
-    observer.value = new IntersectionObserver((entries) => {
-        if (entries[0].isIntersecting && hasMore.value && !isLoading.value) {
-            loadMore();
-        }
-    }, options);
-
-    if (loadMoreRef.value) {
-        observer.value.observe(loadMoreRef.value);
-    }
-};
-
 onMounted(() => {
     if (servicesAvecDemandes.value.length > 0) {
         serviceSelectionne.value = servicesAvecDemandes.value[0];
-        loadMore();
+    } else if (props.services?.length > 0) {
+        serviceSelectionne.value = props.services[0]?.nom;
     }
-    setupObserver();
 });
 
 // --- ACTIONS PAR DEMANDEUR ---
@@ -224,10 +167,10 @@ const supprimerLigne = (item) => {
             <div v-if="serviceSelectionne" class="d-flex">
                 <!-- COLONNE GAUCHE : LISTE DES DEMANDES (FIXE + SCROLL) -->
                 <v-col cols="12" lg="9" class="pa-0 pr-3">
-                    <!-- CARTE FIXE POUR LE CONTENU -->
+                    <!-- ✅ CARTE À HAUTEUR FIXE : c'est elle qui contraint le scroll -->
                     <v-card class="rounded-xl border shadow-sm overflow-hidden" elevation="0"
                         style="height: calc(100vh - 280px);">
-                        <!-- HEADER FIXE -->
+                        <!-- HEADER FIXE (hors zone de scroll) -->
                         <div class="bg-teal-darken-1 pa-3 d-flex align-center" style="min-height: 52px;">
                             <v-icon color="white" class="mr-2">mdi-format-list-bulleted</v-icon>
                             <span class="text-white font-weight-bold text-uppercase" style="letter-spacing: 0.5px">
@@ -240,7 +183,7 @@ const supprimerLigne = (item) => {
                             </v-chip>
                         </div>
 
-                        <!-- ZONE DE SCROLL -->
+                        <!-- ✅ ZONE DE SCROLL : tout le contenu de la liste est ici -->
                         <div style="height: calc(100% - 52px); overflow-y: auto; overflow-x: hidden;"
                             class="scrollable-area">
                             <!-- Message si aucune demande -->
@@ -255,7 +198,7 @@ const supprimerLigne = (item) => {
                                 </v-btn>
                             </div>
 
-                            <!-- LISTE DES DEMANDES -->
+                            <!-- LISTE DES DEMANDES (scrollable) -->
                             <div v-for="(articles, nom) in demandesGroupeesParDemandeur" :key="nom" class="pa-3">
                                 <div class="d-flex align-center mb-3">
                                     <v-icon color="teal-darken-1" class="mr-2">mdi-account-circle</v-icon>
@@ -270,7 +213,7 @@ const supprimerLigne = (item) => {
 
                                 <v-table hover density="comfortable" style="background: transparent !important">
                                     <thead>
-                                        <tr class="bg-teal-lighten-5" style="position: sticky; top: 0; z-index: 10;">
+                                        <tr class="bg-teal-lighten-5">
                                             <th class="text-teal-darken-3 font-weight-bold text-left"
                                                 style="border-top-left-radius: 0 !important; border-bottom: none !important;">
                                                 Désignation
@@ -311,7 +254,7 @@ const supprimerLigne = (item) => {
                                                     <div class="text-caption italic ml-7 mt-1" style="color: #888">
                                                         Origine : {{ item.nom_materiel }}
                                                         <span v-if="item.numero_serie">(S/N : {{ item.numero_serie
-                                                            }})</span>
+                                                        }})</span>
                                                     </div>
                                                 </template>
 
@@ -331,7 +274,7 @@ const supprimerLigne = (item) => {
                                                             <v-icon size="12" color="teal-darken-3"
                                                                 class="mr-1">mdi-plus-circle</v-icon>
                                                             <span class="text-caption text-teal-darken-3">{{ p.nom_piece
-                                                                }}</span>
+                                                            }}</span>
                                                         </div>
                                                     </div>
                                                     <div v-else class="text-caption italic ml-7" style="color: #666">
@@ -389,7 +332,7 @@ const supprimerLigne = (item) => {
                                                     size="x-small" variant="tonal" class="font-weight-bold">
                                                     <v-icon start size="12">
                                                         {{ item.statut === "Validé" ? "mdi-check-circle" :
-                                                        "mdi-clock-outline" }}
+                                                            "mdi-clock-outline" }}
                                                     </v-icon>
                                                     {{ item.statut }}
                                                 </v-chip>
@@ -418,15 +361,6 @@ const supprimerLigne = (item) => {
                                 </div>
 
                                 <v-divider class="my-3"></v-divider>
-                            </div>
-
-                            <!-- LOADER -->
-                            <div ref="loadMoreRef" class="text-center py-3">
-                                <v-progress-circular v-if="isLoading" indeterminate color="teal-darken-1"
-                                    size="32"></v-progress-circular>
-                                <span v-else-if="hasMore" class="text-caption text-grey">⬇ Scroll pour charger
-                                    plus...</span>
-                                <span v-else class="text-caption text-grey">✓ Toutes les demandes sont chargées</span>
                             </div>
                         </div>
                     </v-card>
