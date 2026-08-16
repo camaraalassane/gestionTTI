@@ -178,8 +178,16 @@ class DemandeController extends Controller
 
                 Log::info("Création commande : {$numCmd}");
 
+                // Pré-charger tous les matériels pour éviter les requêtes N+1
+                $materielIds = collect($validated['items'])->pluck('materiel_id')->unique()->toArray();
+                $materiels = Materiel::with(['modele', 'categorie'])->whereIn('id', $materielIds)->get()->keyBy('id');
+
                 foreach ($validated['items'] as $item) {
-                    $mat = Materiel::with(['modele', 'categorie'])->findOrFail($item['materiel_id']);
+                    $mat = $materiels->get($item['materiel_id']);
+                    
+                    if (!$mat) {
+                        throw new \Exception("Matériel introuvable ID: {$item['materiel_id']}");
+                    }
 
                     if (!empty($item['numero_serie']) && $item['mode_sortie'] !== 'pieces') {
                         $mat->update(['numero_serie' => $item['numero_serie']]);
@@ -251,14 +259,18 @@ class DemandeController extends Controller
                     ->lockForUpdate()
                     ->get();
 
+                // Pré-charger les services
+                $services = Service::whereIn('nom', $demandes->pluck('service_beneficiaire')->unique()->filter())->get()->keyBy('nom');
+                
+                // Mettre à jour toutes les pièces associées en une seule requête
+                PieceMateriel::whereIn('demande_id', $demandes->pluck('id'))->update(['statut' => 'Livré']);
+
                 foreach ($demandes as $demande) {
                     if ($demande->statut !== 'En attente') {
                         continue;
                     }
 
-                    $service = Service::where('nom', $demande->service_beneficiaire)->first();
-
-                    PieceMateriel::where('demande_id', $demande->id)->update(['statut' => 'Livré']);
+                    $service = $services->get($demande->service_beneficiaire);
 
                     if ((int)$demande->nbredemande > 0 && $demande->materiel && $demande->materiel->demande_id == $demande->id) {
                         $demande->materiel->update([
@@ -408,8 +420,16 @@ public function gestionService(Request $request)
                     }
                 }
 
+                // Pré-charger les services pour éviter les requêtes N+1
+                $services = Service::whereIn('nom', $demandes->pluck('service_beneficiaire')->unique()->filter())->get()->keyBy('nom');
+
+                // Mise à jour de masse des pièces
+                PieceMateriel::whereIn('demande_id', $demandes->pluck('id'))->update([
+                    'statut' => 'Livré'
+                ]);
+
                 foreach ($demandes as $demande) {
-                    $service = Service::where('nom', $demande->service_beneficiaire)->first();
+                    $service = $services->get($demande->service_beneficiaire);
 
                     if ((int)$demande->nbredemande > 0 && $demande->materiel) {
                         $demande->materiel->update([
@@ -417,10 +437,6 @@ public function gestionService(Request $request)
                             'service_id' => $service ? $service->id : null,
                         ]);
                     }
-
-                    PieceMateriel::where('demande_id', $demande->id)->update([
-                        'statut' => 'Livré'
-                    ]);
 
                     $demande->update(['statut' => 'Clôturé']);
                 }
@@ -453,7 +469,7 @@ public function gestionService(Request $request)
         $demandeur  = $request->query('demandeur');
         $numcomande = $request->query('numcomande');
 
-        $query = Demande::with(['pieces', 'materiel', 'modele'])
+        $query = Demande::with(['pieces', 'materiel.modele', 'materiel.pieces', 'modele'])
             ->where('service_beneficiaire', $serviceNom)
             ->whereIn('statut', ['Validé', 'En attente', 'Clôturé']);
 
@@ -497,8 +513,8 @@ public function gestionService(Request $request)
                     'numero_serie' => $p->numero_serie ?? '—',
                 ]),
                 'est_uniquement_piece'  => (int)$quantite === 0,
-                'a_des_pieces_au_total' => $demande->materiel
-                    ? $demande->materiel->pieces()->exists()
+                'a_des_pieces_au_total' => $demande->materiel && $demande->materiel->pieces
+                    ? $demande->materiel->pieces->isNotEmpty()
                     : false,
             ];
         });

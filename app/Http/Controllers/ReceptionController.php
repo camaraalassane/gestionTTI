@@ -20,7 +20,7 @@ class ReceptionController extends Controller
     public function index(Request $request)
     {
         // Récupérer tous les contrats avec leurs réceptions et catégories
-        $contrats = Contrat::with(['receptions.categorie', 'receptions.materiels.modele.categorie'])
+        $contrats = Contrat::with(['receptions.categorie'])
             ->orderBy('created_at', 'desc')
             ->get();
 
@@ -36,17 +36,7 @@ class ReceptionController extends Controller
                     $dateLivraison = $reception->date_livraison;
                 }
 
-                // Récupérer les catégories via les matériels
-                foreach ($reception->materiels as $materiel) {
-                    if ($materiel->modele && $materiel->modele->categorie) {
-                        $catName = $materiel->modele->categorie->nom;
-                        if (!in_array($catName, $categories)) {
-                            $categories[] = $catName;
-                        }
-                    }
-                }
-
-                // Alternative via la catégorie directe de la réception
+                // Utilisation de la catégorie directe de la réception
                 if ($reception->categorie && !in_array($reception->categorie->nom, $categories)) {
                     $categories[] = $reception->categorie->nom;
                 }
@@ -228,89 +218,75 @@ class ReceptionController extends Controller
         set_time_limit(300);
         ini_set('memory_limit', '512M');
 
-        $contrat = Contrat::with(['receptions.materiels.modele'])->findOrFail($id);
+        $contrat = Contrat::with('receptions')->findOrFail($id);
 
-        $receptionsByDate = [];
-        $allMateriels = collect();
+        $results = DB::select("
+            SELECT 
+                r.date_livraison,
+                mm.nom as designation,
+                SUM(CASE WHEN m.demande_id IS NULL THEN 1 ELSE 0 END) as qte_stock,
+                SUM(CASE WHEN m.demande_id IS NOT NULL THEN 1 ELSE 0 END) as qte_sorti,
+                COUNT(*) as total
+            FROM receptions r
+            JOIN materiels m ON m.reception_id = r.id
+            LEFT JOIN modele_materiels mm ON m.modele_materiel_id = mm.id
+            WHERE r.contrat_id = ?
+            GROUP BY r.date_livraison, mm.nom
+            ORDER BY r.date_livraison ASC, mm.nom ASC
+        ", [$id]);
 
-        foreach ($contrat->receptions as $reception) {
-            $dateKey = $reception->date_livraison ? $reception->date_livraison->format('Y-m-d') : 'date_inconnue';
-
-            if (!isset($receptionsByDate[$dateKey])) {
-                $receptionsByDate[$dateKey] = [
-                    'date_livraison' => $reception->date_livraison,
-                    'materiels' => collect(),
-                    'reception_ids' => []
-                ];
-            }
-
-            $receptionsByDate[$dateKey]['materiels'] = $receptionsByDate[$dateKey]['materiels']->concat($reception->materiels);
-            $receptionsByDate[$dateKey]['reception_ids'][] = $reception->id;
-            $allMateriels = $allMateriels->concat($reception->materiels);
-        }
-
-        $receptionsGrouped = [];
-        foreach ($receptionsByDate as $dateKey => $data) {
-            $groupedModeles = [];
-            $totalStock = 0;
-            $totalSorti = 0;
-
-            foreach ($data['materiels'] as $materiel) {
-                $nomModele = $materiel->modele->nom ?? 'Modèle inconnu';
-
-                if (!isset($groupedModeles[$nomModele])) {
-                    $groupedModeles[$nomModele] = [
-                        'designation' => $nomModele,
-                        'qte_stock' => 0,
-                        'qte_sorti' => 0,
-                        'total' => 0
-                    ];
-                }
-
-                if ($materiel->demande_id !== null) {
-                    $groupedModeles[$nomModele]['qte_sorti']++;
-                    $totalSorti++;
-                } else {
-                    $groupedModeles[$nomModele]['qte_stock']++;
-                    $totalStock++;
-                }
-                $groupedModeles[$nomModele]['total']++;
-            }
-
-            $receptionsGrouped[] = [
-                'date_livraison' => $data['date_livraison'],
-                'groupes' => array_values($groupedModeles),
-                'total_materiels' => $data['materiels']->count(),
-                'total_modeles' => count($groupedModeles),
-                'total_stock' => $totalStock,
-                'total_sorti' => $totalSorti
-            ];
-        }
-
+        $receptionsGroupedArray = [];
         $globalGrouped = [];
         $globalStock = 0;
         $globalSorti = 0;
+        $globalTotal = 0;
 
-        foreach ($allMateriels as $materiel) {
-            $nomModele = $materiel->modele->nom ?? 'Modèle inconnu';
+        foreach ($results as $row) {
+            $dateKey = $row->date_livraison ?? 'date_inconnue';
+            
+            if (!isset($receptionsGroupedArray[$dateKey])) {
+                $receptionsGroupedArray[$dateKey] = [
+                    'date_livraison' => $row->date_livraison ? \Carbon\Carbon::parse($row->date_livraison) : null,
+                    'groupes' => [],
+                    'total_materiels' => 0,
+                    'total_modeles' => 0,
+                    'total_stock' => 0,
+                    'total_sorti' => 0
+                ];
+            }
+            
+            $designation = $row->designation ?? 'Modèle inconnu';
+            $qte_stock = (int)$row->qte_stock;
+            $qte_sorti = (int)$row->qte_sorti;
+            $total = (int)$row->total;
 
-            if (!isset($globalGrouped[$nomModele])) {
-                $globalGrouped[$nomModele] = [
-                    'designation' => $nomModele,
+            $receptionsGroupedArray[$dateKey]['groupes'][] = [
+                'designation' => $designation,
+                'qte_stock' => $qte_stock,
+                'qte_sorti' => $qte_sorti,
+                'total' => $total
+            ];
+            
+            $receptionsGroupedArray[$dateKey]['total_materiels'] += $total;
+            $receptionsGroupedArray[$dateKey]['total_stock'] += $qte_stock;
+            $receptionsGroupedArray[$dateKey]['total_sorti'] += $qte_sorti;
+            $receptionsGroupedArray[$dateKey]['total_modeles']++;
+
+            if (!isset($globalGrouped[$designation])) {
+                $globalGrouped[$designation] = [
+                    'designation' => $designation,
                     'qte_stock' => 0,
                     'qte_sorti' => 0,
                     'total' => 0
                 ];
             }
+            $globalGrouped[$designation]['qte_stock'] += $qte_stock;
+            $globalGrouped[$designation]['qte_sorti'] += $qte_sorti;
+            $globalGrouped[$designation]['total'] += $total;
 
-            if ($materiel->demande_id !== null) {
-                $globalGrouped[$nomModele]['qte_sorti']++;
-                $globalSorti++;
-            } else {
-                $globalGrouped[$nomModele]['qte_stock']++;
-                $globalStock++;
-            }
-            $globalGrouped[$nomModele]['total']++;
+            $globalStock += $qte_stock;
+            $globalSorti += $qte_sorti;
+            $globalTotal += $total;
         }
 
         $firstReception = $contrat->receptions->first();
@@ -324,9 +300,9 @@ class ReceptionController extends Controller
                 'fournisseur' => $contrat->fournisseur,
                 'date_livraison' => $dateLivraison,
             ],
-            'receptions_grouped' => $receptionsGrouped,
+            'receptions_grouped' => array_values($receptionsGroupedArray),
             'groupes' => array_values($globalGrouped),
-            'total_materiels' => $allMateriels->count(),
+            'total_materiels' => $globalTotal,
             'total_modeles' => count($globalGrouped),
             'total_stock' => $globalStock,
             'total_sorti' => $globalSorti,
@@ -353,40 +329,44 @@ class ReceptionController extends Controller
         $dateLivraison = $firstReception->date_livraison;
         $contratId = $firstReception->contrat_id;
 
-        $receptions = Reception::with(['materiels.modele'])
-            ->where('contrat_id', $contratId)
+        $receptions = Reception::where('contrat_id', $contratId)
             ->whereDate('date_livraison', $dateLivraison)
             ->get();
 
-        $materiels = collect();
-        foreach ($receptions as $reception) {
-            $materiels = $materiels->concat($reception->materiels);
-        }
+        $results = DB::select("
+            SELECT 
+                mm.nom as designation,
+                SUM(CASE WHEN m.demande_id IS NULL THEN 1 ELSE 0 END) as qte_stock,
+                SUM(CASE WHEN m.demande_id IS NOT NULL THEN 1 ELSE 0 END) as qte_sorti,
+                COUNT(*) as total
+            FROM receptions r
+            JOIN materiels m ON m.reception_id = r.id
+            LEFT JOIN modele_materiels mm ON m.modele_materiel_id = mm.id
+            WHERE r.contrat_id = ? AND DATE(r.date_livraison) = DATE(?)
+            GROUP BY mm.nom
+        ", [$contratId, $dateLivraison]);
 
         $groupedModeles = [];
         $totalStock = 0;
         $totalSorti = 0;
+        $totalMateriels = 0;
 
-        foreach ($materiels as $materiel) {
-            $nomModele = $materiel->modele->nom ?? 'Modèle inconnu';
+        foreach ($results as $row) {
+            $designation = $row->designation ?? 'Modèle inconnu';
+            $qte_stock = (int)$row->qte_stock;
+            $qte_sorti = (int)$row->qte_sorti;
+            $total = (int)$row->total;
 
-            if (!isset($groupedModeles[$nomModele])) {
-                $groupedModeles[$nomModele] = [
-                    'designation' => $nomModele,
-                    'qte_stock' => 0,
-                    'qte_sorti' => 0,
-                    'total' => 0
-                ];
-            }
+            $groupedModeles[] = [
+                'designation' => $designation,
+                'qte_stock' => $qte_stock,
+                'qte_sorti' => $qte_sorti,
+                'total' => $total
+            ];
 
-            if ($materiel->demande_id !== null) {
-                $groupedModeles[$nomModele]['qte_sorti']++;
-                $totalSorti++;
-            } else {
-                $groupedModeles[$nomModele]['qte_stock']++;
-                $totalStock++;
-            }
-            $groupedModeles[$nomModele]['total']++;
+            $totalStock += $qte_stock;
+            $totalSorti += $qte_sorti;
+            $totalMateriels += $total;
         }
 
         $pdf = Pdf::loadView('pdf.inventaire_contrat', [
@@ -396,7 +376,7 @@ class ReceptionController extends Controller
                 'date_livraison' => $dateLivraison,
             ],
             'groupes' => array_values($groupedModeles),
-            'total_materiels' => $materiels->count(),
+            'total_materiels' => $totalMateriels,
             'total_modeles' => count($groupedModeles),
             'total_stock' => $totalStock,
             'total_sorti' => $totalSorti,

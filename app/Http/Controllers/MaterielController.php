@@ -276,22 +276,39 @@ class MaterielController extends Controller
                         'scan_contrat'   => $scanPath
                     ]);
 
+                    $materielsPayload = [];
+                    $snsForItem = [];
                     for ($i = 0; $i < (int)$item['unite']; $i++) {
-                        $materiel = \App\Models\Materiel::create([
+                        $sn = "SN-" . strtoupper(Str::random(5));
+                        $snsForItem[] = $sn;
+                        $materielsPayload[] = [
                             'modele_materiel_id' => $modele->id,
-                            'numero_serie'       => "SN-" . strtoupper(Str::random(5)),
+                            'numero_serie'       => $sn,
                             'categorie_id'       => $item['categorie_id'],
                             'reception_id'       => $reception->id,
                             'etat'               => 'Disponible',
                             'statut'             => 'Neuf',
-                        ]);
-
+                            'created_at'         => now(),
+                            'updated_at'         => now()
+                        ];
                         $totalCree++;
+                    }
 
-                        if (!empty($item['pieces_modeles'])) {
+                    // Insertion de masse des matériels (par lots de 500 max)
+                    foreach (array_chunk($materielsPayload, 500) as $chunk) {
+                        DB::table('materiels')->insert($chunk);
+                    }
+
+                    // Si des pièces sont définies, on récupère les IDs des matériels insérés via leur numéro de série
+                    if (!empty($item['pieces_modeles'])) {
+                        $insertedMateriels = DB::table('materiels')
+                            ->whereIn('numero_serie', $snsForItem)
+                            ->get(['id', 'numero_serie']);
+
+                        foreach ($insertedMateriels as $mat) {
                             foreach ($item['pieces_modeles'] as $mod) {
                                 $allPiecesPayload[] = [
-                                    'materiel_id'        => $materiel->id,
+                                    'materiel_id'        => $mat->id,
                                     'modele_materiel_id' => $modele->id,
                                     'nom_piece'          => $mod['nom'] ?? "Composant",
                                     'numero_serie'       => "P-SN-" . strtoupper(Str::random(4)),
@@ -365,12 +382,12 @@ class MaterielController extends Controller
                         'description' => $validated['description'] ?? null,
                     ]);
 
-                $receptions = \App\Models\Reception::whereHas('materiels', function($q) use ($modele) {
+                $receptionIds = \App\Models\Reception::whereHas('materiels', function($q) use ($modele) {
                     $q->where('modele_materiel_id', $modele->id);
-                })->get();
+                })->pluck('id');
 
-                foreach ($receptions as $reception) {
-                    $reception->update(['categorie_id' => $validated['categorie_id']]);
+                if ($receptionIds->isNotEmpty()) {
+                    \App\Models\Reception::whereIn('id', $receptionIds)->update(['categorie_id' => $validated['categorie_id']]);
                 }
 
                 Log::info('Modèle, exemplaires et réceptions mis à jour');
